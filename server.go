@@ -7,10 +7,18 @@ import (
 	"github.com/callumeddisford/barry/core"
 )
 
-func Start() {
+type RuntimeConfig struct {
+	Env         string
+	EnableCache bool
+	Port        int
+}
+
+func Start(cfg RuntimeConfig) {
 	config := core.LoadConfig("barry.config.yml")
+	config.CacheEnabled = cfg.EnableCache
+
 	router := core.NewRouter(config)
 
-	fmt.Println("Barry dev server running at http://localhost:8080")
-	http.ListenAndServe(":8080", router)
+	fmt.Printf("Barry running in %s mode at http://localhost:%d\n", cfg.Env, cfg.Port)
+	http.ListenAndServe(fmt.Sprintf(":%d", cfg.Port), router)
 }
