@@ -18,6 +18,7 @@ var InfoCommand = &cli.Command{
 
 		fmt.Println("📁 Output Directory:", config.OutputDir)
 		fmt.Println("🔁 Cache Enabled:", config.CacheEnabled)
+		fmt.Println("🔁 Debug Headers Enabled:", config.DebugHeaders)
 		fmt.Println()
 
 		componentCount := 0
