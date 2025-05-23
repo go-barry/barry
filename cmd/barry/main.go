@@ -15,6 +15,9 @@ func main() {
 		Commands: []*clilib.Command{
 			barrycli.DevCommand,
 			barrycli.ProdCommand,
+			barrycli.CleanCommand,
+			barrycli.CheckCommand,
+			barrycli.InfoCommand,
 		},
 	}
 
