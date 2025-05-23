@@ -43,7 +43,7 @@ func NewRouter(config Config, ctx RuntimeContext) *Router {
 	r.loadRoutes()
 
 	if ctx.EnableWatch {
-		go r.watchRoutes()
+		go r.watchEverything()
 	}
 
 	return r
@@ -244,24 +244,27 @@ func renderErrorPage(w http.ResponseWriter, config Config, status int, message, 
 	w.Write([]byte(fmt.Sprintf("%d - %s", status, message)))
 }
 
-func (r *Router) watchRoutes() {
+func (r *Router) watchEverything() {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return
 	}
 	defer watcher.Close()
 
-	addAllFolders := func() {
-		filepath.Walk("routes", func(path string, info os.FileInfo, err error) error {
-			if err != nil || !info.IsDir() {
+	watchDirs := []string{"routes", "components", "public"}
+
+	addDirs := func() {
+		for _, base := range watchDirs {
+			filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
+				if err == nil && info.IsDir() {
+					_ = watcher.Add(path)
+				}
 				return nil
-			}
-			_ = watcher.Add(path)
-			return nil
-		})
+			})
+		}
 	}
 
-	addAllFolders()
+	addDirs()
 
 	for {
 		select {
@@ -269,11 +272,12 @@ func (r *Router) watchRoutes() {
 			if !ok {
 				return
 			}
+
 			if event.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Remove|fsnotify.Rename) != 0 {
 				r.loadRoutes()
-				addAllFolders()
+				addDirs() // rewatch new folders if added
 				if r.env == "dev" {
-					println("🔄 Routes reloaded:", event.Name)
+					println("🔄 Change detected:", event.Name)
 					if r.onReload != nil {
 						r.onReload()
 					}

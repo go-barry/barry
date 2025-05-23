@@ -1,8 +1,15 @@
 <!-- layout: components/layout.html -->
 {{ define "content" }}
   <section class="hero">
-    <h1>{{ .Title }}</h1>
+    <div class="logoWrapper">
+      <img src="/static/logo.svg" class="logo" width="38" height="48" />
+      <h1>{{ .Title }}</h1>
+    </div>
     <p>{{ .Intro }}</p>
-    {{ template "Card" .Feature }}
+    <ul class="steps">
+      <li>Get started by editing <code>routes/index.html.</code></li>
+      <li>Save and see your changes instantly.</li>
+    </ul>
+    {{ template "Button" .Button }}
   </section>
 {{ end }}
