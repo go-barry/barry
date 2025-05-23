@@ -21,6 +21,10 @@ func Start(cfg RuntimeConfig) {
 
 	mux := http.NewServeMux()
 
+	fs := http.FileServer(http.Dir("public"))
+	mux.Handle("/static/", http.StripPrefix("/static/", fs))
+	mux.Handle("/favicon.ico", fs)
+
 	if cfg.Env == "dev" {
 		reloader := core.NewLiveReloader()
 		mux.HandleFunc("/__barry_reload", reloader.Handler)
@@ -30,7 +34,6 @@ func Start(cfg RuntimeConfig) {
 			EnableWatch: true,
 			OnReload:    reloader.BroadcastReload,
 		})
-
 		mux.Handle("/", router)
 	} else {
 		router := core.NewRouter(config, core.RuntimeContext{
@@ -38,7 +41,6 @@ func Start(cfg RuntimeConfig) {
 			EnableWatch: false,
 			OnReload:    nil,
 		})
-
 		mux.Handle("/", router)
 	}
 
