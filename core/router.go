@@ -1,12 +1,15 @@
 package core
 
 import (
+	"bytes"
 	"html/template"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 type Route struct {
@@ -18,13 +21,30 @@ type Route struct {
 }
 
 type Router struct {
-	config Config
-	routes []Route
+	config   Config
+	env      string
+	onReload func()
+	routes   []Route
 }
 
-func NewRouter(config Config) *Router {
-	r := &Router{config: config}
+type RuntimeContext struct {
+	Env         string
+	EnableWatch bool
+	OnReload    func()
+}
+
+func NewRouter(config Config, ctx RuntimeContext) *Router {
+	r := &Router{
+		config:   config,
+		env:      ctx.Env,
+		onReload: ctx.OnReload,
+	}
 	r.loadRoutes()
+
+	if ctx.EnableWatch {
+		go r.watchRoutes()
+	}
+
 	return r
 }
 
@@ -73,14 +93,40 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		return
 	}
 
+	var rendered bytes.Buffer
+	err = tmpl.Execute(&rendered, data)
+	if err != nil {
+		http.Error(w, "Template execution error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	html := rendered.Bytes()
+
+	// 🔄 Inject live reload script in dev mode
+	if r.env == "dev" {
+		liveReloadScript := `
+<script>
+	if (typeof WebSocket !== "undefined") {
+		const ws = new WebSocket("ws://" + location.host + "/__barry_reload");
+		ws.onmessage = e => {
+			if (e.data === "reload") location.reload();
+		};
+	}
+</script>
+</body>`
+		html = bytes.Replace(html, []byte("</body>"), []byte(liveReloadScript), 1)
+	}
+
+	w.Header().Set("Content-Type", "text/html")
 	if r.config.DebugHeaders {
 		w.Header().Set("X-Barry-Route", filepath.Base(htmlPath))
 	}
-	w.Header().Set("Content-Type", "text/html")
-	tmpl.Execute(w, data)
+	w.Write(html)
 }
 
 func (r *Router) loadRoutes() {
+	r.routes = []Route{}
+
 	filepath.Walk("routes", func(path string, info os.FileInfo, err error) error {
 		if err != nil || !info.IsDir() {
 			return nil
@@ -118,4 +164,48 @@ func (r *Router) loadRoutes() {
 
 		return nil
 	})
+}
+
+func (r *Router) watchRoutes() {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return
+	}
+	defer watcher.Close()
+
+	addAllFolders := func() {
+		filepath.Walk("routes", func(path string, info os.FileInfo, err error) error {
+			if err != nil || !info.IsDir() {
+				return nil
+			}
+			_ = watcher.Add(path)
+			return nil
+		})
+	}
+
+	addAllFolders()
+
+	for {
+		select {
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			if event.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Remove|fsnotify.Rename) != 0 {
+				r.loadRoutes()
+				addAllFolders()
+				if r.env == "dev" {
+					println("🔄 Routes reloaded:", event.Name)
+					if r.onReload != nil {
+						r.onReload()
+					}
+				}
+			}
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			println("❌ Watch error:", err.Error())
+		}
+	}
 }
