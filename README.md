@@ -1,4 +1,6 @@
-# ![Barry logo](/logo.svg) barry
+# ![Barry logo](/logo.svg) barry.
+
+![Barry logo](/header.jpg)
 
 A modern, developer-first HTML + Go web framework for building dynamic, server-rendered, and optionally cached websites — without JavaScript or build tools.
 
