@@ -76,13 +76,11 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		return
 	}
 
-	rawPath := strings.TrimPrefix(filepath.Dir(htmlPath), "routes")
-	resolvedPath := rawPath
-
-	for key, value := range params {
-		resolvedPath = strings.ReplaceAll(resolvedPath, "["+key+"]", value)
+	rawKey := strings.TrimPrefix(filepath.Dir(htmlPath), "routes")
+	for k, v := range params {
+		rawKey = strings.ReplaceAll(rawKey, "["+k+"]", v)
 	}
-	routeKey := strings.TrimPrefix(resolvedPath, "/")
+	routeKey := strings.TrimPrefix(rawKey, "/")
 
 	if r.config.CacheEnabled {
 		if html, ok := GetCachedHTML(r.config, routeKey); ok {
@@ -95,8 +93,19 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		}
 	}
 
-	data := map[string]interface{}{}
+	layoutPath := ""
+	if content, err := os.ReadFile(htmlPath); err == nil {
+		lines := strings.Split(string(content), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "<!-- layout:") && strings.HasSuffix(line, "-->") {
+				layoutPath = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "<!-- layout:"), "-->"))
+				break
+			}
+		}
+	}
 
+	data := map[string]interface{}{}
 	if _, err := os.Stat(serverPath); err == nil {
 		result, err := ExecuteServerFile(serverPath, params)
 		if err != nil {
@@ -106,7 +115,20 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		data = result
 	}
 
-	tmpl, err := template.ParseFiles(htmlPath)
+	var componentFiles []string
+	filepath.Walk("components", func(path string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() && strings.HasSuffix(path, ".html") {
+			componentFiles = append(componentFiles, path)
+		}
+		return nil
+	})
+
+	tmplFiles := append([]string{htmlPath}, componentFiles...)
+	if layoutPath != "" {
+		tmplFiles = append([]string{layoutPath}, tmplFiles...)
+	}
+
+	tmpl, err := template.ParseFiles(tmplFiles...)
 	if err != nil {
 		http.Error(w, "Template error: "+err.Error(), http.StatusInternalServerError)
 		return
