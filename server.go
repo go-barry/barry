@@ -22,11 +22,9 @@ func Start(cfg RuntimeConfig) {
 	mux := http.NewServeMux()
 
 	if cfg.Env == "dev" {
-		// Set up live reload WebSocket
 		reloader := core.NewLiveReloader()
 		mux.HandleFunc("/__barry_reload", reloader.Handler)
 
-		// Create router with live reload hook
 		router := core.NewRouter(config, core.RuntimeContext{
 			Env:         cfg.Env,
 			EnableWatch: true,
@@ -35,7 +33,6 @@ func Start(cfg RuntimeConfig) {
 
 		mux.Handle("/", router)
 	} else {
-		// Prod mode: no live reload
 		router := core.NewRouter(config, core.RuntimeContext{
 			Env:         cfg.Env,
 			EnableWatch: false,

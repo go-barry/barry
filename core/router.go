@@ -76,6 +76,25 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		return
 	}
 
+	rawPath := strings.TrimPrefix(filepath.Dir(htmlPath), "routes")
+	resolvedPath := rawPath
+
+	for key, value := range params {
+		resolvedPath = strings.ReplaceAll(resolvedPath, "["+key+"]", value)
+	}
+	routeKey := strings.TrimPrefix(resolvedPath, "/")
+
+	if r.config.CacheEnabled {
+		if html, ok := GetCachedHTML(r.config, routeKey); ok {
+			w.Header().Set("Content-Type", "text/html")
+			if r.config.DebugHeaders {
+				w.Header().Set("X-Barry-Cache", "HIT")
+			}
+			w.Write(html)
+			return
+		}
+	}
+
 	data := map[string]interface{}{}
 
 	if _, err := os.Stat(serverPath); err == nil {
@@ -102,7 +121,6 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 
 	html := rendered.Bytes()
 
-	// 🔄 Inject live reload script in dev mode
 	if r.env == "dev" {
 		liveReloadScript := `
 <script>
@@ -117,9 +135,13 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		html = bytes.Replace(html, []byte("</body>"), []byte(liveReloadScript), 1)
 	}
 
+	if r.config.CacheEnabled {
+		_ = SaveCachedHTML(r.config, routeKey, html)
+	}
+
 	w.Header().Set("Content-Type", "text/html")
 	if r.config.DebugHeaders {
-		w.Header().Set("X-Barry-Route", filepath.Base(htmlPath))
+		w.Header().Set("X-Barry-Cache", "MISS")
 	}
 	w.Write(html)
 }

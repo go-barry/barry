@@ -15,7 +15,6 @@ type Config struct {
 func LoadConfig(path string) Config {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		// Default config if file doesn't exist
 		return Config{
 			OutputDir:    "./out",
 			CacheEnabled: false,
@@ -26,7 +25,6 @@ func LoadConfig(path string) Config {
 	var cfg Config
 	yaml.Unmarshal(data, &cfg)
 
-	// Set defaults if missing
 	if cfg.OutputDir == "" {
 		cfg.OutputDir = "./out"
 	}
