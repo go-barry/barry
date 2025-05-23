@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"fmt"
 	"html/template"
 	"net/http"
 	"os"
@@ -67,12 +68,12 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	http.NotFound(w, req)
+	renderErrorPage(w, r.config, http.StatusNotFound, "Page not found", req.URL.Path)
 }
 
 func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter, req *http.Request, params map[string]string) {
 	if _, err := os.Stat(htmlPath); err != nil {
-		http.NotFound(w, req)
+		renderErrorPage(w, r.config, http.StatusNotFound, "Page not found", req.URL.Path)
 		return
 	}
 
@@ -208,6 +209,39 @@ func (r *Router) loadRoutes() {
 
 		return nil
 	})
+}
+
+func renderErrorPage(w http.ResponseWriter, config Config, status int, message, path string) {
+	base := "routes/_error"
+	statusFile := fmt.Sprintf("%s/%d.html", base, status)
+	defaultFile := fmt.Sprintf("%s/index.html", base)
+
+	context := map[string]interface{}{
+		"StatusCode": status,
+		"Message":    message,
+		"Path":       path,
+	}
+
+	if _, err := os.Stat(statusFile); err == nil {
+		tmpl, err := template.ParseFiles(statusFile)
+		if err == nil {
+			w.WriteHeader(status)
+			tmpl.Execute(w, context)
+			return
+		}
+	}
+
+	if _, err := os.Stat(defaultFile); err == nil {
+		tmpl, err := template.ParseFiles(defaultFile)
+		if err == nil {
+			w.WriteHeader(status)
+			tmpl.Execute(w, context)
+			return
+		}
+	}
+
+	w.WriteHeader(status)
+	w.Write([]byte(fmt.Sprintf("%d - %s", status, message)))
 }
 
 func (r *Router) watchRoutes() {
