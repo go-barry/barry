@@ -1,0 +1,8 @@
+<!-- layout: components/layout.html -->
+{{ define "content" }}
+  <section class="hero">
+    <h1>{{ .Title }}</h1>
+    <p>{{ .Intro }}</p>
+    {{ template "Card" .Feature }}
+  </section>
+{{ end }}

@@ -1,0 +1,24 @@
+body {
+  font-family: system-ui, sans-serif;
+  background: #f4f4f4;
+  margin: 0;
+  padding: 2rem;
+}
+
+.hero {
+  max-width: 600px;
+  margin: auto;
+  background: white;
+  padding: 2rem;
+  border-radius: 8px;
+  text-align: center;
+  box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+}
+
+.card {
+  background: #fff0f0;
+  padding: 1rem;
+  border-radius: 6px;
+  margin-top: 2rem;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}

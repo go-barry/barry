@@ -13,6 +13,7 @@ func main() {
 		Name:  "barry",
 		Usage: "A dynamic HTML framework powered by Go",
 		Commands: []*clilib.Command{
+			barrycli.InitCommand,
 			barrycli.DevCommand,
 			barrycli.ProdCommand,
 			barrycli.CleanCommand,
