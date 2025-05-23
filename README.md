@@ -1,4 +1,4 @@
-# ![Screenshot of a comment on a GitHub issue showing an image, added in the Markdown, of an Octocat smiling and raising a tentacle.](/logo.svg) barry
+# ![Barry logo](/logo.svg) barry
 
 A modern, developer-first HTML + Go web framework for building dynamic, server-rendered, and optionally cached websites — without JavaScript or build tools.
 
