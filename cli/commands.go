@@ -3,8 +3,6 @@ package cli
 import (
 	"github.com/callumeddisford/barry"
 
-	"fmt"
-
 	"github.com/urfave/cli/v2"
 )
 
@@ -12,7 +10,6 @@ var DevCommand = &cli.Command{
 	Name:  "dev",
 	Usage: "Start Barry in dev mode (no caching, live reload)",
 	Action: func(c *cli.Context) error {
-		fmt.Println("🔧 Starting Barry in dev mode...")
 		cfg := barry.RuntimeConfig{
 			Env:         "dev",
 			EnableCache: false,
@@ -27,7 +24,6 @@ var ProdCommand = &cli.Command{
 	Name:  "prod",
 	Usage: "Start Barry in production mode (caching on by default)",
 	Action: func(c *cli.Context) error {
-		fmt.Println("🚀 Starting Barry in production mode...")
 		cfg := barry.RuntimeConfig{
 			Env:         "prod",
 			EnableCache: true,

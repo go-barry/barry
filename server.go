@@ -15,7 +15,7 @@ type RuntimeConfig struct {
 }
 
 func Start(cfg RuntimeConfig) {
-	fmt.Println("🔧 Starting Barry in", cfg.Env, "mode...")
+	fmt.Println("Starting Barry in", cfg.Env, "mode...")
 
 	config := core.LoadConfig("barry.config.yml")
 	config.CacheEnabled = cfg.EnableCache
