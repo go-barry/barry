@@ -2,6 +2,8 @@
 
 ![Barry logo](/header.jpg)
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/callumeddisford/barry.svg)](https://pkg.go.dev/github.com/callumeddisford/barry)
+
 A modern, developer-first HTML + Go web framework for building dynamic, server-rendered, and optionally cached websites — without JavaScript or build tools.
 
 ## ⚡ Quick Start
