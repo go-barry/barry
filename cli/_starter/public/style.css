@@ -13,7 +13,7 @@ body {
     Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
 }
 
-h1 {
+h1.title {
   font-size: 2rem;
 }
 

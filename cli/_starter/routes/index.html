@@ -1,10 +1,10 @@
 <!-- layout: components/layouts/layout.html -->
 {{ define "content" }}
-  <section class="hero">
+  <div class="hero">
     <div class="content">
       <div class="logoWrapper">
         <img src="/static/logo.svg" alt="barry logo" class="logo" width="38" height="48" />
-        <h1>{{ .Title }}</h1>
+        <h1 class="title">{{ .Title }}</h1>
       </div>
       <p>{{ .Intro }}</p>
       <ul class="steps">
@@ -13,5 +13,5 @@
       </ul>
       {{ template "Button" .Button }}
     </div>
-  </section>
+  </div>
 {{ end }}
