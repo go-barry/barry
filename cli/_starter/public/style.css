@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Geist+Mono&display=swap');
+
 * {
   margin: 0;
   padding: 0;
@@ -50,6 +52,7 @@ h1.title {
   margin-left: 2rem;
   color: #ededed;
   font-family: "Geist Mono", monospace;
+  font-weight: 400;
   line-height: 1.5rem;
 }
 
