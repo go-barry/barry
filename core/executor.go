@@ -4,31 +4,28 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/printer"
-	"go/token"
+	"go/format"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"text/template"
 )
 
 type ExecContext struct {
-	UserCode string
-	Params   map[string]string
+	ImportPath string
+	Params     map[string]string
 }
 
 const runnerTemplate = `package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
-	"fmt"
+	target "{{ .ImportPath }}"
 )
-
-{{ .UserCode }}
 
 func main() {
 	r := &http.Request{}
@@ -38,7 +35,7 @@ func main() {
 		{{- end }}
 	}
 
-	result, err := HandleRequest(r, params)
+	result, err := target.HandleRequest(r, params)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "barry-error:", err)
 		os.Exit(1)
@@ -49,37 +46,47 @@ func main() {
 `
 
 func ExecuteServerFile(filePath string, params map[string]string) (map[string]interface{}, error) {
-	cleanCode, err := extractFunctionsFromFile(filePath)
+	modRoot, moduleName, err := findGoModRoot(filePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract functions: %v", err)
+		return nil, fmt.Errorf("could not resolve go.mod: %w", err)
 	}
 
+	relPath, err := filepath.Rel(modRoot, filepath.Dir(filePath))
+	if err != nil {
+		return nil, fmt.Errorf("cannot resolve relative import path: %w", err)
+	}
+	importPath := filepath.ToSlash(filepath.Join(moduleName, relPath))
+
 	ctx := ExecContext{
-		UserCode: cleanCode,
-		Params:   params,
+		ImportPath: importPath,
+		Params:     params,
 	}
 
 	var buf bytes.Buffer
 	tmpl := template.Must(template.New("runner").Parse(runnerTemplate))
 	tmpl.Execute(&buf, ctx)
 
-	tmpDir, err := os.MkdirTemp("", "barry_exec")
+	formatted, err := format.Source(buf.Bytes())
 	if err != nil {
-		return nil, err
+		formatted = buf.Bytes()
 	}
-	defer os.RemoveAll(tmpDir)
+
+	tmpDir := filepath.Join(modRoot, ".barry-tmp")
+	os.MkdirAll(tmpDir, os.ModePerm)
 
 	tmpFile := filepath.Join(tmpDir, "main.go")
-	os.WriteFile(tmpFile, buf.Bytes(), 0644)
+	os.WriteFile(tmpFile, formatted, 0644)
 
 	cmd := exec.Command("go", "run", tmpFile)
+	cmd.Dir = modRoot
+
 	var out, stderr bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &stderr
 
 	err = cmd.Run()
 	if err != nil {
-		return nil, fmt.Errorf("exec error: %v\nstderr: %s", err, stderr.String())
+		return nil, fmt.Errorf("exec error: %v stderr: %s", err, stderr.String())
 	}
 
 	var result map[string]interface{}
@@ -90,25 +97,25 @@ func ExecuteServerFile(filePath string, params map[string]string) (map[string]in
 	return result, nil
 }
 
-func extractFunctionsFromFile(filePath string) (string, error) {
-	fs := token.NewFileSet()
-
-	node, err := parser.ParseFile(fs, filePath, nil, parser.ParseComments)
-	if err != nil {
-		return "", err
-	}
-
-	var buf bytes.Buffer
-
-	for _, decl := range node.Decls {
-		if fn, ok := decl.(*ast.FuncDecl); ok {
-			err := printer.Fprint(&buf, fs, fn)
-			if err != nil {
-				return "", err
+func findGoModRoot(startPath string) (string, string, error) {
+	dir := filepath.Dir(startPath)
+	for {
+		modPath := filepath.Join(dir, "go.mod")
+		if _, err := os.Stat(modPath); err == nil {
+			data, _ := os.ReadFile(modPath)
+			lines := strings.Split(string(data), "\n")
+			for _, line := range lines {
+				if strings.HasPrefix(line, "module ") {
+					module := strings.TrimSpace(strings.TrimPrefix(line, "module "))
+					return dir, module, nil
+				}
 			}
-			buf.WriteString("\n\n")
 		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
 	}
-
-	return buf.String(), nil
+	return "", "", fmt.Errorf("go.mod not found starting from %s", startPath)
 }
