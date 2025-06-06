@@ -2,14 +2,14 @@
 
 ![Barry logo](/header.jpg)
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/callumeddisford/barry.svg)](https://pkg.go.dev/github.com/callumeddisford/barry)
+[![Go Reference](https://pkg.go.dev/badge/github.com/go-barry/barry.svg)](https://pkg.go.dev/github.com/go-barry/barry)
 
 A modern, developer-first HTML + Go web framework for building dynamic, server-rendered, and optionally cached websites — without JavaScript or build tools.
 
 ## ⚡ Quick Start
 
 ```bash
-go install github.com/callumeddisford/barry/cmd/barry@latest
+go install github.com/go-barry/barry/cmd/barry@latest
 cd your-project
 barry init
 barry dev

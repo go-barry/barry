@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"github.com/callumeddisford/barry"
+	"github.com/go-barry/barry"
 
 	"github.com/urfave/cli/v2"
 )

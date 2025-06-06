@@ -4,7 +4,7 @@ import (
 	"log"
 	"os"
 
-	barrycli "github.com/callumeddisford/barry/cli"
+	barrycli "github.com/go-barry/barry/cli"
 	clilib "github.com/urfave/cli/v2"
 )
 

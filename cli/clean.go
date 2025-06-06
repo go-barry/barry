@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/callumeddisford/barry/core"
+	"github.com/go-barry/barry/core"
 	"github.com/urfave/cli/v2"
 )
 

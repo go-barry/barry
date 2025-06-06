@@ -1,6 +1,6 @@
 package main
 
-import "github.com/callumeddisford/barry"
+import "github.com/go-barry/barry"
 
 func main() {
 	barry.Start(barry.RuntimeConfig{

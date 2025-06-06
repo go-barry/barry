@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"path/filepath"
 
-	"github.com/callumeddisford/barry/core"
+	"github.com/go-barry/barry/core"
 )
 
 type RuntimeConfig struct {

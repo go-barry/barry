@@ -1,4 +1,4 @@
-module github.com/callumeddisford/barry
+module github.com/go-barry/barry
 
 go 1.24.3
 
