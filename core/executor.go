@@ -58,20 +58,6 @@ func ExecuteServerFile(filePath string, params map[string]string) (map[string]in
 		return nil, fmt.Errorf("cannot resolve relative import path: %w", err)
 	}
 
-	cleanPath := strings.ReplaceAll(relPath, "[", "_")
-	cleanPath = strings.ReplaceAll(cleanPath, "]", "")
-
-	if relPath != cleanPath {
-		original := filepath.Join(modRoot, relPath)
-		link := filepath.Join(modRoot, cleanPath)
-
-		if _, err := os.Stat(link); os.IsNotExist(err) {
-			_ = os.Symlink(original, link)
-		}
-
-		relPath = cleanPath
-	}
-
 	importPath := filepath.ToSlash(filepath.Join(moduleName, relPath))
 
 	ctx := ExecContext{

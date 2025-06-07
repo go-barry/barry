@@ -53,7 +53,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	path := strings.Trim(req.URL.Path, "/")
 
 	if path == "" {
-		r.serveStatic("routes/index.html", "routes/index.server.go", w, req, map[string]string{})
+		r.serveStatic("routes/index.html", "routes/index.server.go", w, req, map[string]string{}, "")
 		return
 	}
 
@@ -63,7 +63,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			for i, key := range route.ParamKeys {
 				params[key] = matches[i+1]
 			}
-			r.serveStatic(route.HTMLPath, route.ServerPath, w, req, params)
+			r.serveStatic(route.HTMLPath, route.ServerPath, w, req, params, path)
 			return
 		}
 	}
@@ -71,17 +71,14 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	renderErrorPage(w, r.config, http.StatusNotFound, "Page not found", req.URL.Path)
 }
 
-func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter, req *http.Request, params map[string]string) {
+func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter, req *http.Request, params map[string]string, resolvedPath string) {
 	if _, err := os.Stat(htmlPath); err != nil {
 		renderErrorPage(w, r.config, http.StatusNotFound, "Page not found", req.URL.Path)
 		return
 	}
 
-	rawKey := strings.TrimPrefix(filepath.Dir(htmlPath), "routes")
-	for k, v := range params {
-		rawKey = strings.ReplaceAll(rawKey, "["+k+"]", v)
-	}
-	routeKey := strings.TrimPrefix(rawKey, "/")
+	// ✅ Use resolvedPath (e.g. /docs/introduction) for caching
+	routeKey := strings.TrimPrefix(resolvedPath, "/")
 
 	if r.config.CacheEnabled {
 		if html, ok := GetCachedHTML(r.config, routeKey); ok {
@@ -129,14 +126,30 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		tmplFiles = append([]string{layoutPath}, tmplFiles...)
 	}
 
-	tmpl, err := template.ParseFiles(tmplFiles...)
+	tmpl := template.New("").Funcs(template.FuncMap{
+		"props": func(values ...interface{}) map[string]interface{} {
+			if len(values)%2 != 0 {
+				panic("props must be called with even number of arguments")
+			}
+			m := make(map[string]interface{}, len(values)/2)
+			for i := 0; i < len(values); i += 2 {
+				key, ok := values[i].(string)
+				if !ok {
+					panic("props keys must be strings")
+				}
+				m[key] = values[i+1]
+			}
+			return m
+		},
+	})
+	tmpl, err := tmpl.ParseFiles(tmplFiles...)
 	if err != nil {
 		http.Error(w, "Template error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	var rendered bytes.Buffer
-	err = tmpl.Execute(&rendered, data)
+	err = tmpl.ExecuteTemplate(&rendered, "layout", data)
 	if err != nil {
 		http.Error(w, "Template execution error: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -188,8 +201,8 @@ func (r *Router) loadRoutes() {
 		pattern := ""
 
 		for _, part := range parts {
-			if strings.HasPrefix(part, "[") && strings.HasSuffix(part, "]") {
-				key := part[1 : len(part)-1]
+			if strings.HasPrefix(part, "_") {
+				key := part[1:]
 				paramKeys = append(paramKeys, key)
 				pattern += "/([^/]+)"
 			} else {
