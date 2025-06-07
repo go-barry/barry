@@ -46,15 +46,32 @@ func main() {
 `
 
 func ExecuteServerFile(filePath string, params map[string]string) (map[string]interface{}, error) {
-	modRoot, moduleName, err := findGoModRoot(filePath)
+	absPath, _ := filepath.Abs(filePath)
+
+	modRoot, moduleName, err := findGoModRoot(absPath)
 	if err != nil {
 		return nil, fmt.Errorf("could not resolve go.mod: %w", err)
 	}
 
-	relPath, err := filepath.Rel(modRoot, filepath.Dir(filePath))
+	relPath, err := filepath.Rel(modRoot, filepath.Dir(absPath))
 	if err != nil {
 		return nil, fmt.Errorf("cannot resolve relative import path: %w", err)
 	}
+
+	cleanPath := strings.ReplaceAll(relPath, "[", "_")
+	cleanPath = strings.ReplaceAll(cleanPath, "]", "")
+
+	if relPath != cleanPath {
+		original := filepath.Join(modRoot, relPath)
+		link := filepath.Join(modRoot, cleanPath)
+
+		if _, err := os.Stat(link); os.IsNotExist(err) {
+			_ = os.Symlink(original, link)
+		}
+
+		relPath = cleanPath
+	}
+
 	importPath := filepath.ToSlash(filepath.Join(moduleName, relPath))
 
 	ctx := ExecContext{
@@ -86,7 +103,7 @@ func ExecuteServerFile(filePath string, params map[string]string) (map[string]in
 
 	err = cmd.Run()
 	if err != nil {
-		return nil, fmt.Errorf("exec error: %v stderr: %s", err, stderr.String())
+		return nil, fmt.Errorf("exec error: %v\nstderr: %s", err, stderr.String())
 	}
 
 	var result map[string]interface{}
