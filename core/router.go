@@ -77,7 +77,6 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		return
 	}
 
-	// ✅ Use resolvedPath (e.g. /docs/introduction) for caching
 	routeKey := strings.TrimPrefix(resolvedPath, "/")
 
 	if r.config.CacheEnabled {
@@ -140,6 +139,16 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 				m[key] = values[i+1]
 			}
 			return m
+		},
+		"safeHTML": func(s interface{}) template.HTML {
+			switch val := s.(type) {
+			case template.HTML:
+				return val
+			case string:
+				return template.HTML(val)
+			default:
+				return ""
+			}
 		},
 	})
 	tmpl, err := tmpl.ParseFiles(tmplFiles...)
@@ -288,7 +297,7 @@ func (r *Router) watchEverything() {
 
 			if event.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Remove|fsnotify.Rename) != 0 {
 				r.loadRoutes()
-				addDirs() // rewatch new folders if added
+				addDirs()
 				if r.env == "dev" {
 					println("🔄 Change detected:", event.Name)
 					if r.onReload != nil {
