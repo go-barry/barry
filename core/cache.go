@@ -1,6 +1,7 @@
 package core
 
 import (
+	"compress/gzip"
 	"os"
 	"path/filepath"
 )
@@ -20,14 +21,26 @@ func GetCachedHTML(config Config, route string) ([]byte, bool) {
 	return content, true
 }
 
-func SaveCachedHTML(config Config, route string, html []byte) error {
-	cacheDir := filepath.Join(config.OutputDir, route)
-	cachePath := filepath.Join(cacheDir, "index.html")
+func SaveCachedHTML(config Config, routeKey string, html []byte) error {
+	outDir := filepath.Join(config.OutputDir, routeKey)
+	os.MkdirAll(outDir, os.ModePerm)
 
-	err := os.MkdirAll(cacheDir, os.ModePerm)
-	if err != nil {
+	htmlPath := filepath.Join(outDir, "index.html")
+	gzPath := htmlPath + ".gz"
+
+	if err := os.WriteFile(htmlPath, html, 0644); err != nil {
 		return err
 	}
 
-	return os.WriteFile(cachePath, html, 0644)
+	f, err := os.Create(gzPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	gz := gzip.NewWriter(f)
+	defer gz.Close()
+
+	_, err = gz.Write(html)
+	return err
 }

@@ -101,12 +101,30 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 	routeKey := strings.TrimPrefix(resolvedPath, "/")
 
 	if r.config.CacheEnabled {
-		if html, ok := GetCachedHTML(r.config, routeKey); ok {
+		cacheDir := filepath.Join(r.config.OutputDir, routeKey)
+		htmlPath := filepath.Join(cacheDir, "index.html")
+		gzPath := htmlPath + ".gz"
+
+		if r.env == "prod" && acceptsGzip(req) {
+			if _, err := os.Stat(gzPath); err == nil {
+				data, _ := os.ReadFile(gzPath)
+				w.Header().Set("Content-Encoding", "gzip")
+				w.Header().Set("Content-Type", "text/html")
+				if r.config.DebugHeaders {
+					w.Header().Set("X-Barry-Cache", "HIT")
+				}
+				w.Write(data)
+				return
+			}
+		}
+
+		if _, err := os.Stat(htmlPath); err == nil {
+			data, _ := os.ReadFile(htmlPath)
 			w.Header().Set("Content-Type", "text/html")
 			if r.config.DebugHeaders {
 				w.Header().Set("X-Barry-Cache", "HIT")
 			}
-			w.Write(html)
+			w.Write(data)
 			return
 		}
 	}
@@ -339,4 +357,8 @@ func shouldLogRequest(path string) bool {
 	return !strings.HasPrefix(path, "/.well-known") &&
 		!strings.HasPrefix(path, "/favicon.ico") &&
 		!strings.HasPrefix(path, "/robots.txt")
+}
+
+func acceptsGzip(r *http.Request) bool {
+	return strings.Contains(r.Header.Get("Accept-Encoding"), "gzip")
 }
