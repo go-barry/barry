@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 )
@@ -34,6 +35,16 @@ type RuntimeContext struct {
 	OnReload    func()
 }
 
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
 func NewRouter(config Config, ctx RuntimeContext) *Router {
 	r := &Router{
 		config:   config,
@@ -50,25 +61,35 @@ func NewRouter(config Config, ctx RuntimeContext) *Router {
 }
 
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	start := time.Now()
 	path := strings.Trim(req.URL.Path, "/")
 
-	if path == "" {
-		r.serveStatic("routes/index.html", "routes/index.server.go", w, req, map[string]string{}, "")
-		return
-	}
+	recorder := &statusRecorder{ResponseWriter: w, status: 200}
 
-	for _, route := range r.routes {
-		if matches := route.URLPattern.FindStringSubmatch(path); matches != nil {
-			params := map[string]string{}
-			for i, key := range route.ParamKeys {
-				params[key] = matches[i+1]
+	if path == "" {
+		r.serveStatic("routes/index.html", "routes/index.server.go", recorder, req, map[string]string{}, "")
+	} else {
+		found := false
+		for _, route := range r.routes {
+			if matches := route.URLPattern.FindStringSubmatch(path); matches != nil {
+				params := map[string]string{}
+				for i, key := range route.ParamKeys {
+					params[key] = matches[i+1]
+				}
+				r.serveStatic(route.HTMLPath, route.ServerPath, recorder, req, params, path)
+				found = true
+				break
 			}
-			r.serveStatic(route.HTMLPath, route.ServerPath, w, req, params, path)
-			return
+		}
+		if !found {
+			renderErrorPage(recorder, r.config, 404, "Page not found", req.URL.Path)
 		}
 	}
 
-	renderErrorPage(w, r.config, http.StatusNotFound, "Page not found", req.URL.Path)
+	if r.env == "dev" && shouldLogRequest(req.URL.Path) {
+		duration := time.Since(start).Milliseconds()
+		fmt.Printf("%s %d %dms\n", req.URL.Path, recorder.status, duration)
+	}
 }
 
 func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter, req *http.Request, params map[string]string, resolvedPath string) {
@@ -104,7 +125,7 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 
 	data := map[string]interface{}{}
 	if _, err := os.Stat(serverPath); err == nil {
-		result, err := ExecuteServerFile(serverPath, params)
+		result, err := ExecuteServerFile(serverPath, params, r.env == "dev")
 		if err != nil {
 			http.Error(w, "Server logic error: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -312,4 +333,10 @@ func (r *Router) watchEverything() {
 			println("❌ Watch error:", err.Error())
 		}
 	}
+}
+
+func shouldLogRequest(path string) bool {
+	return !strings.HasPrefix(path, "/.well-known") &&
+		!strings.HasPrefix(path, "/favicon.ico") &&
+		!strings.HasPrefix(path, "/robots.txt")
 }

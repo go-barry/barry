@@ -16,7 +16,7 @@ func LoadConfig(path string) Config {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return Config{
-			OutputDir:    "./out",
+			OutputDir:    "./cache",
 			CacheEnabled: false,
 			DebugHeaders: false,
 		}
@@ -26,7 +26,7 @@ func LoadConfig(path string) Config {
 	yaml.Unmarshal(data, &cfg)
 
 	if cfg.OutputDir == "" {
-		cfg.OutputDir = "./out"
+		cfg.OutputDir = "./cache"
 	}
 
 	return cfg

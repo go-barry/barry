@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/format"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,13 +22,15 @@ const runnerTemplate = `package main
 
 import (
 	"encoding/json"
-	"fmt"
+	"log"
 	"net/http"
 	"os"
 	target "{{ .ImportPath }}"
 )
 
 func main() {
+	log.SetOutput(os.Stderr)
+
 	r := &http.Request{}
 	params := map[string]string{
 		{{- range $k, $v := .Params }}
@@ -37,7 +40,7 @@ func main() {
 
 	result, err := target.HandleRequest(r, params)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "barry-error:", err)
+		log.Println("barry-error:", err)
 		os.Exit(1)
 	}
 
@@ -45,7 +48,7 @@ func main() {
 }
 `
 
-func ExecuteServerFile(filePath string, params map[string]string) (map[string]interface{}, error) {
+func ExecuteServerFile(filePath string, params map[string]string, devMode bool) (map[string]interface{}, error) {
 	absPath, _ := filepath.Abs(filePath)
 
 	modRoot, moduleName, err := findGoModRoot(absPath)
@@ -83,17 +86,21 @@ func ExecuteServerFile(filePath string, params map[string]string) (map[string]in
 	cmd := exec.Command("go", "run", tmpFile)
 	cmd.Dir = modRoot
 
-	var out, stderr bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &stderr
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	if devMode {
+		cmd.Stderr = io.MultiWriter(os.Stderr, &errBuf)
+	} else {
+		cmd.Stderr = &errBuf
+	}
 
 	err = cmd.Run()
 	if err != nil {
-		return nil, fmt.Errorf("exec error: %v\nstderr: %s", err, stderr.String())
+		return nil, fmt.Errorf("exec error: %v\nstderr: %s", err, errBuf.String())
 	}
 
 	var result map[string]interface{}
-	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+	if err := json.Unmarshal(outBuf.Bytes(), &result); err != nil {
 		return nil, fmt.Errorf("json decode error: %v", err)
 	}
 
