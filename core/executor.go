@@ -96,7 +96,11 @@ func ExecuteServerFile(filePath string, params map[string]string, devMode bool) 
 
 	err = cmd.Run()
 	if err != nil {
-		return nil, fmt.Errorf("exec error: %v\nstderr: %s", err, errBuf.String())
+		errText := errBuf.String()
+		if strings.Contains(errText, "barry-error: barry: not found") {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("exec error: %v\nstderr: %s", err, errText)
 	}
 
 	var result map[string]interface{}

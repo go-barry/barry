@@ -152,9 +152,14 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 	if _, err := os.Stat(serverPath); err == nil {
 		result, err := ExecuteServerFile(serverPath, params, r.env == "dev")
 		if err != nil {
+			if IsNotFoundError(err) {
+				renderErrorPage(w, r.config, r.env, http.StatusNotFound, "Page not found", req.URL.Path)
+				return
+			}
 			http.Error(w, "Server logic error: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+
 		data = result
 	}
 
