@@ -45,6 +45,13 @@ func (r *statusRecorder) WriteHeader(code int) {
 	r.ResponseWriter.WriteHeader(code)
 }
 
+func (r *statusRecorder) Status() int {
+	if r.status == 0 {
+		return 200
+	}
+	return r.status
+}
+
 func NewRouter(config Config, ctx RuntimeContext) *Router {
 	r := &Router{
 		config:   config,
@@ -82,19 +89,20 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			}
 		}
 		if !found {
-			renderErrorPage(recorder, r.config, 404, "Page not found", req.URL.Path)
+			renderErrorPage(recorder, r.config, r.env, http.StatusNotFound, "Page not found", req.URL.Path)
+
 		}
 	}
 
 	if r.env == "dev" && shouldLogRequest(req.URL.Path) {
 		duration := time.Since(start).Milliseconds()
-		fmt.Printf("%s %d %dms\n", req.URL.Path, recorder.status, duration)
+		fmt.Printf("%s %d %dms\n", req.URL.Path, recorder.Status(), duration)
 	}
 }
 
 func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter, req *http.Request, params map[string]string, resolvedPath string) {
 	if _, err := os.Stat(htmlPath); err != nil {
-		renderErrorPage(w, r.config, http.StatusNotFound, "Page not found", req.URL.Path)
+		renderErrorPage(w, r.config, r.env, http.StatusNotFound, "Page not found", req.URL.Path)
 		return
 	}
 
@@ -131,8 +139,7 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 
 	layoutPath := ""
 	if content, err := os.ReadFile(htmlPath); err == nil {
-		lines := strings.Split(string(content), "\n")
-		for _, line := range lines {
+		for _, line := range strings.Split(string(content), "\n") {
 			line = strings.TrimSpace(line)
 			if strings.HasPrefix(line, "<!-- layout:") && strings.HasSuffix(line, "-->") {
 				layoutPath = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "<!-- layout:"), "-->"))
@@ -159,21 +166,24 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		return nil
 	})
 
-	tmplFiles := append([]string{htmlPath}, componentFiles...)
+	var tmplFiles []string
 	if layoutPath != "" {
-		tmplFiles = append([]string{layoutPath}, tmplFiles...)
+		tmplFiles = append(tmplFiles, layoutPath)
 	}
+	tmplFiles = append(tmplFiles, htmlPath)
+	tmplFiles = append(tmplFiles, componentFiles...)
 
 	tmpl := template.New("").Funcs(BarryTemplateFuncs(r.env, r.config.OutputDir))
-
 	tmpl, err := tmpl.ParseFiles(tmplFiles...)
 	if err != nil {
 		http.Error(w, "Template error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	layoutName := "layout"
+
 	var rendered bytes.Buffer
-	err = tmpl.ExecuteTemplate(&rendered, "layout", data)
+	err = tmpl.ExecuteTemplate(&rendered, layoutName, data)
 	if err != nil {
 		http.Error(w, "Template execution error: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -248,33 +258,69 @@ func (r *Router) loadRoutes() {
 	})
 }
 
-func renderErrorPage(w http.ResponseWriter, config Config, status int, message, path string) {
+func renderErrorPage(w http.ResponseWriter, config Config, env string, status int, message, path string) {
 	base := "routes/_error"
 	statusFile := fmt.Sprintf("%s/%d.html", base, status)
 	defaultFile := fmt.Sprintf("%s/index.html", base)
 
 	context := map[string]interface{}{
-		"StatusCode": status,
-		"Message":    message,
-		"Path":       path,
+		"Title":       fmt.Sprintf("%d - %s", status, message),
+		"StatusCode":  status,
+		"Message":     message,
+		"Path":        path,
+		"Description": message,
 	}
 
-	if _, err := os.Stat(statusFile); err == nil {
-		tmpl, err := template.ParseFiles(statusFile)
-		if err == nil {
-			w.WriteHeader(status)
-			tmpl.Execute(w, context)
-			return
+	tryRender := func(file string) bool {
+		contentBytes, err := os.ReadFile(file)
+		if err != nil {
+			return false
 		}
+
+		content := string(contentBytes)
+		layoutPath := ""
+		for _, line := range strings.Split(content, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "<!-- layout:") && strings.HasSuffix(line, "-->") {
+				layoutPath = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "<!-- layout:"), "-->"))
+				break
+			}
+		}
+
+		var tmplFiles []string
+		if layoutPath != "" {
+			tmplFiles = append(tmplFiles, layoutPath)
+		}
+		tmplFiles = append(tmplFiles, file)
+
+		filepath.Walk("components", func(path string, info os.FileInfo, err error) error {
+			if err == nil && !info.IsDir() && strings.HasSuffix(path, ".html") {
+				if layoutPath != "" && filepath.Clean(path) == filepath.Clean("components/layouts/layout.html") {
+					return nil
+				}
+				tmplFiles = append(tmplFiles, path)
+			}
+			return nil
+		})
+
+		tmpl := template.New("").Funcs(BarryTemplateFuncs(env, config.OutputDir))
+		tmpl, err = tmpl.ParseFiles(tmplFiles...)
+		if err != nil {
+			fmt.Println("❌ Error parsing error page:", err)
+			return false
+		}
+
+		w.WriteHeader(status)
+		err = tmpl.ExecuteTemplate(w, "layout", context)
+		if err != nil {
+			fmt.Println("❌ Error executing error layout:", err)
+			return false
+		}
+		return true
 	}
 
-	if _, err := os.Stat(defaultFile); err == nil {
-		tmpl, err := template.ParseFiles(defaultFile)
-		if err == nil {
-			w.WriteHeader(status)
-			tmpl.Execute(w, context)
-			return
-		}
+	if tryRender(statusFile) || tryRender(defaultFile) {
+		return
 	}
 
 	w.WriteHeader(status)
