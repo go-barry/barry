@@ -1,10 +1,9 @@
 # ![Barry logo](/logo.svg) barry.
 
-![Barry logo](/header.jpg)
-
+<a href="https://go-barry.dev">![Barry logo](/header.jpg)</a>
 [![Go Reference](https://pkg.go.dev/badge/github.com/go-barry/barry.svg)](https://pkg.go.dev/github.com/go-barry/barry)
 
-[https://go-barry.dev](https://go-barry.dev)
+[go-barry.dev](https:///go-barry.dev)
 
 A modern, developer-first HTML + Go web framework for building dynamic, server-rendered, and optionally cached websites — without JavaScript or build tools.
 
