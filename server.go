@@ -38,6 +38,11 @@ func Start(cfg RuntimeConfig) {
 			w.Header().Set("Cache-Control", "no-store")
 			http.ServeFile(w, r, filepath.Join(publicDir, "favicon.ico"))
 		})
+
+		mux.HandleFunc("/robots.txt", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-store")
+			http.ServeFile(w, r, filepath.Join(publicDir, "robots.txt"))
+		})
 	} else {
 		mux.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
 			uri := r.URL.Path
@@ -80,6 +85,11 @@ func Start(cfg RuntimeConfig) {
 		mux.Handle("/favicon.ico", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Cache-Control", "public, max-age=31536000")
 			http.ServeFile(w, r, filepath.Join(publicDir, "favicon.ico"))
+		}))
+
+		mux.Handle("/robots.txt", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "public, max-age=31536000")
+			http.ServeFile(w, r, filepath.Join(publicDir, "robots.txt"))
 		}))
 	}
 
