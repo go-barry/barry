@@ -16,7 +16,7 @@ import (
 	minjs "github.com/tdewolff/minify/v2/js"
 )
 
-func MinifyAsset(env, path string) string {
+func MinifyAsset(env, path string, cacheDir string) string {
 	if env != "prod" {
 		return path
 	}
@@ -35,7 +35,7 @@ func MinifyAsset(env, path string) string {
 
 	publicPath := strings.TrimPrefix(path, "/static/")
 	src := filepath.Join("public", publicPath)
-	min := filepath.Join("public", fmt.Sprintf("%s.min%s", name, ext))
+	min := filepath.Join(cacheDir, "static", fmt.Sprintf("%s.min%s", name, ext))
 	minGz := min + ".gz"
 
 	original, err := os.ReadFile(src)
@@ -63,6 +63,7 @@ func MinifyAsset(env, path string) string {
 
 	minified := buf.Bytes()
 
+	os.MkdirAll(filepath.Dir(min), os.ModePerm)
 	_ = os.WriteFile(min, minified, 0644)
 
 	if f, err := os.Create(minGz); err == nil {
@@ -79,10 +80,10 @@ func MinifyAsset(env, path string) string {
 	return fmt.Sprintf("/static/%s.min%s?v=%s", name, ext, hash)
 }
 
-func BarryTemplateFuncs(env string) template.FuncMap {
+func BarryTemplateFuncs(env, cacheDir string) template.FuncMap {
 	return template.FuncMap{
 		"minify": func(path string) string {
-			return MinifyAsset(env, path)
+			return MinifyAsset(env, path, cacheDir)
 		},
 		"props": func(values ...interface{}) map[string]interface{} {
 			if len(values)%2 != 0 {

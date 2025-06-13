@@ -3,7 +3,9 @@ package barry
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/go-barry/barry/core"
 )
@@ -23,6 +25,7 @@ func Start(cfg RuntimeConfig) {
 	mux := http.NewServeMux()
 
 	publicDir := "public"
+	cacheStaticDir := filepath.Join(config.OutputDir, "static")
 
 	if cfg.Env == "dev" {
 		staticHandler := http.StripPrefix("/static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -36,10 +39,47 @@ func Start(cfg RuntimeConfig) {
 			http.ServeFile(w, r, filepath.Join(publicDir, "favicon.ico"))
 		})
 	} else {
-		fs := http.FileServer(http.Dir(publicDir))
-		mux.Handle("/static/", http.StripPrefix("/static/", fs))
+		mux.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
+			uri := r.URL.Path
+			if i := strings.Index(uri, "?"); i != -1 {
+				uri = uri[:i]
+			}
+			trimmed := strings.TrimPrefix(uri, "/static/")
+			cachedFile := filepath.Join(cacheStaticDir, trimmed)
+			gzipFile := cachedFile + ".gz"
+
+			if acceptsGzip(r) {
+				if _, err := os.Stat(gzipFile); err == nil {
+					ext := filepath.Ext(cachedFile)
+					switch ext {
+					case ".css":
+						w.Header().Set("Content-Type", "text/css")
+					case ".js":
+						w.Header().Set("Content-Type", "application/javascript")
+					default:
+						w.Header().Set("Content-Type", "application/octet-stream")
+					}
+
+					w.Header().Set("Content-Encoding", "gzip")
+					w.Header().Set("Vary", "Accept-Encoding")
+					w.Header().Set("Cache-Control", "public, max-age=31536000")
+					http.ServeFile(w, r, gzipFile)
+					return
+				}
+			}
+
+			if _, err := os.Stat(cachedFile); err == nil {
+				w.Header().Set("Cache-Control", "public, max-age=31536000")
+				http.ServeFile(w, r, cachedFile)
+				return
+			}
+
+			http.StripPrefix("/static/", http.FileServer(http.Dir(publicDir))).ServeHTTP(w, r)
+		})
+
 		mux.Handle("/favicon.ico", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			fs.ServeHTTP(w, r)
+			w.Header().Set("Cache-Control", "public, max-age=31536000")
+			http.ServeFile(w, r, filepath.Join(publicDir, "favicon.ico"))
 		}))
 	}
 
@@ -64,4 +104,8 @@ func Start(cfg RuntimeConfig) {
 
 	fmt.Printf("✅ Barry running at http://localhost:%d\n", cfg.Port)
 	http.ListenAndServe(fmt.Sprintf(":%d", cfg.Port), mux)
+}
+
+func acceptsGzip(r *http.Request) bool {
+	return strings.Contains(r.Header.Get("Accept-Encoding"), "gzip")
 }

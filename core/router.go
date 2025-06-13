@@ -164,7 +164,7 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		tmplFiles = append([]string{layoutPath}, tmplFiles...)
 	}
 
-	tmpl := template.New("").Funcs(BarryTemplateFuncs(r.env))
+	tmpl := template.New("").Funcs(BarryTemplateFuncs(r.env, r.config.OutputDir))
 
 	tmpl, err := tmpl.ParseFiles(tmplFiles...)
 	if err != nil {
