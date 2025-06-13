@@ -164,32 +164,8 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		tmplFiles = append([]string{layoutPath}, tmplFiles...)
 	}
 
-	tmpl := template.New("").Funcs(template.FuncMap{
-		"props": func(values ...interface{}) map[string]interface{} {
-			if len(values)%2 != 0 {
-				panic("props must be called with even number of arguments")
-			}
-			m := make(map[string]interface{}, len(values)/2)
-			for i := 0; i < len(values); i += 2 {
-				key, ok := values[i].(string)
-				if !ok {
-					panic("props keys must be strings")
-				}
-				m[key] = values[i+1]
-			}
-			return m
-		},
-		"safeHTML": func(s interface{}) template.HTML {
-			switch val := s.(type) {
-			case template.HTML:
-				return val
-			case string:
-				return template.HTML(val)
-			default:
-				return ""
-			}
-		},
-	})
+	tmpl := template.New("").Funcs(BarryTemplateFuncs(r.env))
+
 	tmpl, err := tmpl.ParseFiles(tmplFiles...)
 	if err != nil {
 		http.Error(w, "Template error: "+err.Error(), http.StatusInternalServerError)
