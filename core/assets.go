@@ -109,5 +109,27 @@ func BarryTemplateFuncs(env, cacheDir string) template.FuncMap {
 				return ""
 			}
 		},
+		"versioned": func(path string) string {
+			if !strings.HasPrefix(path, "/static/") {
+				return path
+			}
+
+			rel := strings.TrimPrefix(path, "/static/")
+			locations := []string{
+				filepath.Join("public", rel),
+				filepath.Join(cacheDir, "static", rel),
+			}
+
+			for _, file := range locations {
+				if content, err := os.ReadFile(file); err == nil {
+					h := md5.New()
+					h.Write(content)
+					hash := hex.EncodeToString(h.Sum(nil))[:6]
+					return fmt.Sprintf("/static/%s?v=%s", rel, hash)
+				}
+			}
+
+			return path
+		},
 	}
 }

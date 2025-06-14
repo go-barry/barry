@@ -61,36 +61,65 @@ func Start(cfg RuntimeConfig) {
 						w.Header().Set("Content-Type", "text/css")
 					case ".js":
 						w.Header().Set("Content-Type", "application/javascript")
+					case ".webp":
+						w.Header().Set("Content-Type", "image/webp")
+					case ".svg":
+						w.Header().Set("Content-Type", "image/svg+xml")
+					case ".png":
+						w.Header().Set("Content-Type", "image/png")
+					case ".jpg", ".jpeg":
+						w.Header().Set("Content-Type", "image/jpeg")
 					default:
 						w.Header().Set("Content-Type", "application/octet-stream")
 					}
-
 					w.Header().Set("Content-Encoding", "gzip")
 					w.Header().Set("Vary", "Accept-Encoding")
-					w.Header().Set("Cache-Control", "public, max-age=31536000")
+					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 					http.ServeFile(w, r, gzipFile)
 					return
 				}
 			}
 
 			if _, err := os.Stat(cachedFile); err == nil {
-				w.Header().Set("Cache-Control", "public, max-age=31536000")
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 				http.ServeFile(w, r, cachedFile)
 				return
 			}
 
-			http.StripPrefix("/static/", http.FileServer(http.Dir(publicDir))).ServeHTTP(w, r)
+			publicFile := filepath.Join(publicDir, trimmed)
+			if _, err := os.Stat(publicFile); err == nil {
+				ext := filepath.Ext(publicFile)
+				switch ext {
+				case ".webp":
+					w.Header().Set("Content-Type", "image/webp")
+				case ".svg":
+					w.Header().Set("Content-Type", "image/svg+xml")
+				case ".png":
+					w.Header().Set("Content-Type", "image/png")
+				case ".jpg", ".jpeg":
+					w.Header().Set("Content-Type", "image/jpeg")
+				case ".woff":
+					w.Header().Set("Content-Type", "font/woff")
+				case ".woff2":
+					w.Header().Set("Content-Type", "font/woff2")
+				}
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				http.ServeFile(w, r, publicFile)
+				return
+			}
+
+			http.NotFound(w, r)
 		})
 
-		mux.Handle("/favicon.ico", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Cache-Control", "public, max-age=31536000")
+		mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 			http.ServeFile(w, r, filepath.Join(publicDir, "favicon.ico"))
-		}))
+		})
 
-		mux.Handle("/robots.txt", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Cache-Control", "public, max-age=31536000")
+		mux.HandleFunc("/robots.txt", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 			http.ServeFile(w, r, filepath.Join(publicDir, "robots.txt"))
-		}))
+		})
 	}
 
 	if cfg.Env == "dev" {
