@@ -1,7 +1,9 @@
 package core
 
 import (
+	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -23,10 +25,12 @@ type Route struct {
 }
 
 type Router struct {
-	config   Config
-	env      string
-	onReload func()
-	routes   []Route
+	config         Config
+	env            string
+	onReload       func()
+	routes         []Route
+	componentFiles []string
+	templateCache  map[string]*template.Template
 }
 
 type RuntimeContext struct {
@@ -54,17 +58,31 @@ func (r *statusRecorder) Status() int {
 
 func NewRouter(config Config, ctx RuntimeContext) *Router {
 	r := &Router{
-		config:   config,
-		env:      ctx.Env,
-		onReload: ctx.OnReload,
+		config:        config,
+		env:           ctx.Env,
+		onReload:      ctx.OnReload,
+		templateCache: make(map[string]*template.Template),
 	}
+
 	r.loadRoutes()
+	r.loadComponentFiles()
 
 	if ctx.EnableWatch {
 		go r.watchEverything()
 	}
 
 	return r
+}
+
+func (r *Router) loadComponentFiles() {
+	var files []string
+	filepath.Walk("components", func(path string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() && strings.HasSuffix(path, ".html") {
+			files = append(files, path)
+		}
+		return nil
+	})
+	r.componentFiles = files
 }
 
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -89,8 +107,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			}
 		}
 		if !found {
-			renderErrorPage(recorder, r.config, r.env, http.StatusNotFound, "Page not found", req.URL.Path)
-
+			renderErrorPage(w, r.config, r.env, http.StatusNotFound, "Page not found", req.URL.Path, r.componentFiles)
 		}
 	}
 
@@ -102,7 +119,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter, req *http.Request, params map[string]string, resolvedPath string) {
 	if _, err := os.Stat(htmlPath); err != nil {
-		renderErrorPage(w, r.config, r.env, http.StatusNotFound, "Page not found", req.URL.Path)
+		renderErrorPage(w, r.config, r.env, http.StatusNotFound, "Page not found", req.URL.Path, r.componentFiles)
 		return
 	}
 
@@ -114,10 +131,16 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		gzPath := htmlPath + ".gz"
 
 		if r.env == "prod" && acceptsGzip(req) {
-			if _, err := os.Stat(gzPath); err == nil {
-				data, _ := os.ReadFile(gzPath)
+			if data, err := os.ReadFile(gzPath); err == nil {
+				ext := filepath.Ext(htmlPath)
+				switch ext {
+				case ".html":
+					w.Header().Set("Content-Type", "text/html")
+				default:
+					w.Header().Set("Content-Type", "application/octet-stream")
+				}
 				w.Header().Set("Content-Encoding", "gzip")
-				w.Header().Set("Content-Type", "text/html")
+				w.Header().Set("Vary", "Accept-Encoding")
 				if r.config.DebugHeaders {
 					w.Header().Set("X-Barry-Cache", "HIT")
 				}
@@ -126,8 +149,7 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 			}
 		}
 
-		if _, err := os.Stat(htmlPath); err == nil {
-			data, _ := os.ReadFile(htmlPath)
+		if data, err := os.ReadFile(htmlPath); err == nil {
 			w.Header().Set("Content-Type", "text/html")
 			if r.config.DebugHeaders {
 				w.Header().Set("X-Barry-Cache", "HIT")
@@ -137,40 +159,23 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		}
 	}
 
-	layoutPath := ""
-	if content, err := os.ReadFile(htmlPath); err == nil {
-		for _, line := range strings.Split(string(content), "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "<!-- layout:") && strings.HasSuffix(line, "-->") {
-				layoutPath = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "<!-- layout:"), "-->"))
-				break
-			}
-		}
-	}
+	layoutPath := extractLayoutPath(htmlPath)
 
 	data := map[string]interface{}{}
 	if _, err := os.Stat(serverPath); err == nil {
 		result, err := ExecuteServerFile(serverPath, params, r.env == "dev")
 		if err != nil {
 			if IsNotFoundError(err) {
-				renderErrorPage(w, r.config, r.env, http.StatusNotFound, "Page not found", req.URL.Path)
+				renderErrorPage(w, r.config, r.env, http.StatusNotFound, "Page not found", req.URL.Path, r.componentFiles)
 				return
 			}
 			http.Error(w, "Server logic error: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-
 		data = result
 	}
 
-	var componentFiles []string
-	filepath.Walk("components", func(path string, info os.FileInfo, err error) error {
-		if err == nil && !info.IsDir() && strings.HasSuffix(path, ".html") {
-			componentFiles = append(componentFiles, path)
-		}
-		return nil
-	})
-
+	componentFiles := r.componentFiles
 	var tmplFiles []string
 	if layoutPath != "" {
 		tmplFiles = append(tmplFiles, layoutPath)
@@ -178,15 +183,23 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 	tmplFiles = append(tmplFiles, htmlPath)
 	tmplFiles = append(tmplFiles, componentFiles...)
 
-	tmpl := template.New("").Funcs(BarryTemplateFuncs(r.env, r.config.OutputDir))
-	tmpl, err := tmpl.ParseFiles(tmplFiles...)
-	if err != nil {
-		http.Error(w, "Template error: "+err.Error(), http.StatusInternalServerError)
-		return
+	cacheKey := hashTemplateFiles(tmplFiles)
+
+	var tmpl *template.Template
+	var err error
+
+	tmpl, ok := r.templateCache[cacheKey]
+	if !ok {
+		tmpl = template.New("").Funcs(BarryTemplateFuncs(r.env, r.config.OutputDir))
+		tmpl, err = tmpl.ParseFiles(tmplFiles...)
+		if err != nil {
+			http.Error(w, "Template error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		r.templateCache[cacheKey] = tmpl
 	}
 
 	layoutName := "layout"
-
 	var rendered bytes.Buffer
 	err = tmpl.ExecuteTemplate(&rendered, layoutName, data)
 	if err != nil {
@@ -222,10 +235,10 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 }
 
 func (r *Router) loadRoutes() {
-	r.routes = []Route{}
+	var routes []Route
 
-	filepath.Walk("routes", func(path string, info os.FileInfo, err error) error {
-		if err != nil || !info.IsDir() {
+	filepath.WalkDir("routes", func(path string, d os.DirEntry, err error) error {
+		if err != nil || !d.IsDir() {
 			return nil
 		}
 
@@ -251,19 +264,21 @@ func (r *Router) loadRoutes() {
 
 		regex := regexp.MustCompile("^" + strings.TrimPrefix(pattern, "/") + "$")
 
-		r.routes = append(r.routes, Route{
+		routes = append(routes, Route{
 			URLPattern: regex,
 			ParamKeys:  paramKeys,
-			HTMLPath:   filepath.Join(path, "index.html"),
+			HTMLPath:   htmlPath,
 			ServerPath: filepath.Join(path, "index.server.go"),
 			FilePath:   path,
 		})
 
 		return nil
 	})
+
+	r.routes = routes
 }
 
-func renderErrorPage(w http.ResponseWriter, config Config, env string, status int, message, path string) {
+func renderErrorPage(w http.ResponseWriter, config Config, env string, status int, message, path string, componentFiles []string) {
 	base := "routes/_error"
 	statusFile := fmt.Sprintf("%s/%d.html", base, status)
 	defaultFile := fmt.Sprintf("%s/index.html", base)
@@ -277,45 +292,23 @@ func renderErrorPage(w http.ResponseWriter, config Config, env string, status in
 	}
 
 	tryRender := func(file string) bool {
-		contentBytes, err := os.ReadFile(file)
-		if err != nil {
-			return false
-		}
-
-		content := string(contentBytes)
-		layoutPath := ""
-		for _, line := range strings.Split(content, "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "<!-- layout:") && strings.HasSuffix(line, "-->") {
-				layoutPath = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "<!-- layout:"), "-->"))
-				break
-			}
-		}
+		layoutPath := extractLayoutPath(file)
 
 		var tmplFiles []string
 		if layoutPath != "" {
 			tmplFiles = append(tmplFiles, layoutPath)
 		}
 		tmplFiles = append(tmplFiles, file)
-
-		filepath.Walk("components", func(path string, info os.FileInfo, err error) error {
-			if err == nil && !info.IsDir() && strings.HasSuffix(path, ".html") {
-				if layoutPath != "" && filepath.Clean(path) == filepath.Clean("components/layouts/layout.html") {
-					return nil
-				}
-				tmplFiles = append(tmplFiles, path)
-			}
-			return nil
-		})
+		tmplFiles = append(tmplFiles, componentFiles...)
 
 		tmpl := template.New("").Funcs(BarryTemplateFuncs(env, config.OutputDir))
-		tmpl, err = tmpl.ParseFiles(tmplFiles...)
+		tmpl, err := tmpl.ParseFiles(tmplFiles...)
 		if err != nil {
 			fmt.Println("❌ Error parsing error page:", err)
 			return false
 		}
 
-		w.WriteHeader(status)
+		writeStatusOnce(w, status)
 		err = tmpl.ExecuteTemplate(w, "layout", context)
 		if err != nil {
 			fmt.Println("❌ Error executing error layout:", err)
@@ -328,7 +321,7 @@ func renderErrorPage(w http.ResponseWriter, config Config, env string, status in
 		return
 	}
 
-	w.WriteHeader(status)
+	writeStatusOnce(w, status)
 	w.Write([]byte(fmt.Sprintf("%d - %s", status, message)))
 }
 
@@ -388,4 +381,36 @@ func shouldLogRequest(path string) bool {
 
 func acceptsGzip(r *http.Request) bool {
 	return strings.Contains(r.Header.Get("Accept-Encoding"), "gzip")
+}
+
+func extractLayoutPath(file string) string {
+	f, err := os.Open(file)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for i := 0; i < 50 && scanner.Scan(); i++ {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "<!-- layout:") && strings.HasSuffix(line, "-->") {
+			return strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "<!-- layout:"), "-->"))
+		}
+	}
+
+	return ""
+}
+
+func writeStatusOnce(w http.ResponseWriter, status int) {
+	if rw, ok := w.(*statusRecorder); ok && rw.status == 0 {
+		rw.WriteHeader(status)
+	}
+}
+
+func hashTemplateFiles(paths []string) string {
+	h := sha256.New()
+	for _, p := range paths {
+		h.Write([]byte(p))
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
