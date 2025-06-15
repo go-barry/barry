@@ -23,14 +23,12 @@ func GetCachedHTML(config Config, route string) ([]byte, bool) {
 
 func SaveCachedHTML(config Config, routeKey string, html []byte) error {
 	outDir := filepath.Join(config.OutputDir, routeKey)
-	os.MkdirAll(outDir, os.ModePerm)
+	if err := os.MkdirAll(outDir, os.ModePerm); err != nil {
+		return err
+	}
 
 	htmlPath := filepath.Join(outDir, "index.html")
 	gzPath := htmlPath + ".gz"
-
-	if err := os.WriteFile(htmlPath, html, 0644); err != nil {
-		return err
-	}
 
 	f, err := os.Create(gzPath)
 	if err != nil {

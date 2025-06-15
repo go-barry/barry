@@ -62,15 +62,13 @@ func MinifyAsset(env, path string, cacheDir string) string {
 	}
 
 	minified := buf.Bytes()
-
 	os.MkdirAll(filepath.Dir(min), os.ModePerm)
-	_ = os.WriteFile(min, minified, 0644)
 
 	if f, err := os.Create(minGz); err == nil {
 		gz := gzip.NewWriter(f)
-		gz.Write(minified)
-		gz.Close()
-		f.Close()
+		_, _ = gz.Write(minified)
+		_ = gz.Close()
+		_ = f.Close()
 	}
 
 	h := md5.New()
