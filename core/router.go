@@ -132,15 +132,16 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 
 		if r.env == "prod" && acceptsGzip(req) {
 			if data, err := os.ReadFile(gzPath); err == nil {
-				ext := filepath.Ext(htmlPath)
-				switch ext {
-				case ".html":
-					w.Header().Set("Content-Type", "text/html")
-				default:
-					w.Header().Set("Content-Type", "application/octet-stream")
+				etag := generateETag(data)
+				if match := req.Header.Get("If-None-Match"); match == etag {
+					w.WriteHeader(http.StatusNotModified)
+					return
 				}
+
+				w.Header().Set("ETag", etag)
 				w.Header().Set("Content-Encoding", "gzip")
 				w.Header().Set("Vary", "Accept-Encoding")
+				w.Header().Set("Content-Type", "text/html")
 				if r.config.DebugHeaders {
 					w.Header().Set("X-Barry-Cache", "HIT")
 				}
@@ -150,6 +151,13 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		}
 
 		if data, err := os.ReadFile(htmlPath); err == nil {
+			etag := generateETag(data)
+			if match := req.Header.Get("If-None-Match"); match == etag {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+
+			w.Header().Set("ETag", etag)
 			w.Header().Set("Content-Type", "text/html")
 			if r.config.DebugHeaders {
 				w.Header().Set("X-Barry-Cache", "HIT")
@@ -157,6 +165,7 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 			w.Write(data)
 			return
 		}
+
 	}
 
 	layoutPath := extractLayoutPath(htmlPath)
@@ -413,4 +422,9 @@ func hashTemplateFiles(paths []string) string {
 		h.Write([]byte(p))
 	}
 	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+func generateETag(data []byte) string {
+	hash := sha256.Sum256(data)
+	return fmt.Sprintf(`W/"%x"`, hash[:8])
 }
