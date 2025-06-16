@@ -59,6 +59,24 @@ func (r *statusRecorder) Status() int {
 }
 
 var cacheLocks sync.Map
+var cacheQueue = make(chan cacheWriteRequest, 100)
+
+type cacheWriteRequest struct {
+	Config   Config
+	RouteKey string
+	HTML     []byte
+	Lock     *sync.Mutex
+}
+
+func init() {
+	go func() {
+		for req := range cacheQueue {
+			req.Lock.Lock()
+			_ = SaveCachedHTML(req.Config, req.RouteKey, req.HTML)
+			req.Lock.Unlock()
+		}
+	}()
+}
 
 func NewRouter(config Config, ctx RuntimeContext) *Router {
 	r := &Router{
@@ -252,11 +270,12 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 
 	if r.config.CacheEnabled {
 		lock := getOrCreateLock(routeKey)
-		go func(html []byte, key string, l *sync.Mutex) {
-			l.Lock()
-			defer l.Unlock()
-			_ = SaveCachedHTML(r.config, key, html)
-		}(html, routeKey, lock)
+		cacheQueue <- cacheWriteRequest{
+			Config:   r.config,
+			RouteKey: routeKey,
+			HTML:     html,
+			Lock:     lock,
+		}
 	}
 }
 
