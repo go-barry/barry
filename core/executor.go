@@ -14,12 +14,8 @@ import (
 	json "github.com/segmentio/encoding/json"
 )
 
-type ExecContext struct {
-	ImportPath string
-	Params     map[string]string
-}
-
-const runnerTemplate = `package main
+const (
+	runnerTemplate = `package main
 
 import (
 	"encoding/json"
@@ -49,6 +45,16 @@ func main() {
 }
 `
 
+	barryTmpDir      = ".barry-tmp"
+	errorPrefix      = "barry-error:"
+	errorNotFoundMsg = "barry-error: barry: not found"
+)
+
+type ExecContext struct {
+	ImportPath string
+	Params     map[string]string
+}
+
 func ExecuteServerFile(filePath string, params map[string]string, devMode bool) (map[string]interface{}, error) {
 	absPath, _ := filepath.Abs(filePath)
 
@@ -71,18 +77,24 @@ func ExecuteServerFile(filePath string, params map[string]string, devMode bool) 
 
 	var buf bytes.Buffer
 	tmpl := template.Must(template.New("runner").Parse(runnerTemplate))
-	tmpl.Execute(&buf, ctx)
+	if err := tmpl.Execute(&buf, ctx); err != nil {
+		return nil, fmt.Errorf("template execution error: %w", err)
+	}
 
 	formatted, err := format.Source(buf.Bytes())
 	if err != nil {
 		formatted = buf.Bytes()
 	}
 
-	tmpDir := filepath.Join(modRoot, ".barry-tmp")
-	os.MkdirAll(tmpDir, os.ModePerm)
+	tmpDir := filepath.Join(modRoot, barryTmpDir)
+	if err := os.MkdirAll(tmpDir, os.ModePerm); err != nil {
+		return nil, fmt.Errorf("could not create temp dir: %w", err)
+	}
 
 	tmpFile := filepath.Join(tmpDir, "main.go")
-	os.WriteFile(tmpFile, formatted, 0644)
+	if err := os.WriteFile(tmpFile, formatted, 0644); err != nil {
+		return nil, fmt.Errorf("could not write temp file: %w", err)
+	}
 
 	cmd := exec.Command("go", "run", tmpFile)
 	cmd.Dir = modRoot
@@ -98,7 +110,7 @@ func ExecuteServerFile(filePath string, params map[string]string, devMode bool) 
 	err = cmd.Run()
 	if err != nil {
 		errText := errBuf.String()
-		if strings.Contains(errText, "barry-error: barry: not found") {
+		if strings.Contains(errText, errorNotFoundMsg) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("exec error: %v\nstderr: %s", err, errText)
@@ -106,7 +118,7 @@ func ExecuteServerFile(filePath string, params map[string]string, devMode bool) 
 
 	var result map[string]interface{}
 	if err := json.Unmarshal(outBuf.Bytes(), &result); err != nil {
-		return nil, fmt.Errorf("json decode error: %v", err)
+		return nil, fmt.Errorf("json decode error: %w", err)
 	}
 
 	return result, nil
@@ -117,7 +129,10 @@ func findGoModRoot(startPath string) (string, string, error) {
 	for {
 		modPath := filepath.Join(dir, "go.mod")
 		if _, err := os.Stat(modPath); err == nil {
-			data, _ := os.ReadFile(modPath)
+			data, err := os.ReadFile(modPath)
+			if err != nil {
+				return "", "", fmt.Errorf("failed to read go.mod: %w", err)
+			}
 			lines := strings.Split(string(data), "\n")
 			for _, line := range lines {
 				if strings.HasPrefix(line, "module ") {

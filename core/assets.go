@@ -62,20 +62,26 @@ func MinifyAsset(env, path string, cacheDir string) string {
 	}
 
 	minified := buf.Bytes()
-	os.MkdirAll(filepath.Dir(min), os.ModePerm)
+
+	if err := os.MkdirAll(filepath.Dir(min), os.ModePerm); err != nil {
+		return path
+	}
 
 	if f, err := os.Create(minGz); err == nil {
+		defer f.Close()
 		gz := gzip.NewWriter(f)
-		_, _ = gz.Write(minified)
-		_ = gz.Close()
-		_ = f.Close()
+		if _, err := gz.Write(minified); err == nil {
+			_ = gz.Close()
+		}
 	}
 
 	h := md5.New()
 	h.Write(minified)
 	hash := hex.EncodeToString(h.Sum(nil))[:6]
 
-	return fmt.Sprintf("/static/%s.min%s?v=%s", name, ext, hash)
+	var out strings.Builder
+	fmt.Fprintf(&out, "/static/%s.min%s?v=%s", name, ext, hash)
+	return out.String()
 }
 
 func BarryTemplateFuncs(env, cacheDir string) template.FuncMap {
@@ -123,7 +129,9 @@ func BarryTemplateFuncs(env, cacheDir string) template.FuncMap {
 					h := md5.New()
 					h.Write(content)
 					hash := hex.EncodeToString(h.Sum(nil))[:6]
-					return fmt.Sprintf("/static/%s?v=%s", rel, hash)
+					var out strings.Builder
+					fmt.Fprintf(&out, "/static/%s?v=%s", rel, hash)
+					return out.String()
 				}
 			}
 
