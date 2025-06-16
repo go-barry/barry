@@ -420,6 +420,10 @@ func hashTemplateFiles(paths []string) string {
 	h := sha256.New()
 	for _, p := range paths {
 		h.Write([]byte(p))
+		if info, err := os.Stat(p); err == nil {
+			mtime := info.ModTime().UnixNano()
+			h.Write([]byte(fmt.Sprintf("%d", mtime)))
+		}
 	}
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
