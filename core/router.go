@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -117,6 +118,8 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
+var cacheLocks sync.Map
+
 func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter, req *http.Request, params map[string]string, resolvedPath string) {
 	if _, err := os.Stat(htmlPath); err != nil {
 		renderErrorPage(w, r.config, r.env, http.StatusNotFound, "Page not found", req.URL.Path, r.componentFiles)
@@ -137,7 +140,6 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 					w.WriteHeader(http.StatusNotModified)
 					return
 				}
-
 				w.Header().Set("ETag", etag)
 				w.Header().Set("Content-Encoding", "gzip")
 				w.Header().Set("Vary", "Accept-Encoding")
@@ -156,7 +158,6 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 				w.WriteHeader(http.StatusNotModified)
 				return
 			}
-
 			w.Header().Set("ETag", etag)
 			w.Header().Set("Content-Type", "text/html")
 			if r.config.DebugHeaders {
@@ -181,9 +182,9 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		data = result
 	}
 
-	var tmplFiles []string
-	var err error
 	layoutPath := extractLayoutPath(htmlPath)
+
+	var tmplFiles []string
 	if layoutPath != "" {
 		tmplFiles = append(tmplFiles, layoutPath)
 	}
@@ -194,6 +195,7 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 	tmpl, ok := r.templateCache[cacheKey]
 	if !ok {
 		tmpl = template.New("").Funcs(BarryTemplateFuncs(r.env, r.config.OutputDir))
+		var err error
 		tmpl, err = tmpl.ParseFiles(tmplFiles...)
 		if err != nil {
 			http.Error(w, "Template error: "+err.Error(), http.StatusInternalServerError)
@@ -211,7 +213,7 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 	html := rendered.Bytes()
 
 	if r.env == "dev" {
-		liveReloadScript := `
+		html = bytes.Replace(html, []byte("</body>"), []byte(`
 <script>
 	if (typeof WebSocket !== "undefined") {
 		const ws = new WebSocket("ws://" + location.host + "/__barry_reload");
@@ -220,12 +222,7 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		};
 	}
 </script>
-</body>`
-		html = bytes.Replace(html, []byte("</body>"), []byte(liveReloadScript), 1)
-	}
-
-	if r.config.CacheEnabled {
-		_ = SaveCachedHTML(r.config, routeKey, html)
+</body>`), 1)
 	}
 
 	w.Header().Set("Content-Type", "text/html")
@@ -233,6 +230,15 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		w.Header().Set("X-Barry-Cache", "MISS")
 	}
 	w.Write(html)
+
+	if r.config.CacheEnabled {
+		lock := getOrCreateLock(routeKey)
+		go func(html []byte, key string, l *sync.Mutex) {
+			l.Lock()
+			defer l.Unlock()
+			_ = SaveCachedHTML(r.config, key, html)
+		}(html, routeKey, lock)
+	}
 }
 
 func (r *Router) loadRoutes() {
@@ -423,4 +429,14 @@ func hashTemplateFiles(paths []string) string {
 func generateETag(data []byte) string {
 	hash := sha256.Sum256(data)
 	return fmt.Sprintf(`W/"%x"`, hash[:8])
+}
+
+func getOrCreateLock(key string) *sync.Mutex {
+	lock, ok := cacheLocks.Load(key)
+	if ok {
+		return lock.(*sync.Mutex)
+	}
+	mutex := &sync.Mutex{}
+	actual, _ := cacheLocks.LoadOrStore(key, mutex)
+	return actual.(*sync.Mutex)
 }
