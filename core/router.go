@@ -127,11 +127,11 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 
 	if r.config.CacheEnabled {
 		cacheDir := filepath.Join(r.config.OutputDir, routeKey)
-		htmlPath := filepath.Join(cacheDir, "index.html")
-		gzPath := htmlPath + ".gz"
+		cachedFile := filepath.Join(cacheDir, "index.html")
+		gzFile := cachedFile + ".gz"
 
 		if r.env == "prod" && acceptsGzip(req) {
-			if data, err := os.ReadFile(gzPath); err == nil {
+			if data, err := os.ReadFile(gzFile); err == nil {
 				etag := generateETag(data)
 				if match := req.Header.Get("If-None-Match"); match == etag {
 					w.WriteHeader(http.StatusNotModified)
@@ -150,7 +150,7 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 			}
 		}
 
-		if data, err := os.ReadFile(htmlPath); err == nil {
+		if data, err := os.ReadFile(cachedFile); err == nil {
 			etag := generateETag(data)
 			if match := req.Header.Get("If-None-Match"); match == etag {
 				w.WriteHeader(http.StatusNotModified)
@@ -165,10 +165,7 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 			w.Write(data)
 			return
 		}
-
 	}
-
-	layoutPath := extractLayoutPath(htmlPath)
 
 	data := map[string]interface{}{}
 	if _, err := os.Stat(serverPath); err == nil {
@@ -184,19 +181,16 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		data = result
 	}
 
-	componentFiles := r.componentFiles
 	var tmplFiles []string
+	var err error
+	layoutPath := extractLayoutPath(htmlPath)
 	if layoutPath != "" {
 		tmplFiles = append(tmplFiles, layoutPath)
 	}
 	tmplFiles = append(tmplFiles, htmlPath)
-	tmplFiles = append(tmplFiles, componentFiles...)
+	tmplFiles = append(tmplFiles, r.componentFiles...)
 
 	cacheKey := hashTemplateFiles(tmplFiles)
-
-	var tmpl *template.Template
-	var err error
-
 	tmpl, ok := r.templateCache[cacheKey]
 	if !ok {
 		tmpl = template.New("").Funcs(BarryTemplateFuncs(r.env, r.config.OutputDir))
@@ -208,10 +202,8 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		r.templateCache[cacheKey] = tmpl
 	}
 
-	layoutName := "layout"
 	var rendered bytes.Buffer
-	err = tmpl.ExecuteTemplate(&rendered, layoutName, data)
-	if err != nil {
+	if err := tmpl.ExecuteTemplate(&rendered, "layout", data); err != nil {
 		http.Error(w, "Template execution error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
