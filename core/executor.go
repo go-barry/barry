@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"go/format"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
+	"time"
 
 	json "github.com/segmentio/encoding/json"
 )
@@ -86,12 +88,15 @@ func ExecuteServerFile(filePath string, params map[string]string, devMode bool) 
 		formatted = buf.Bytes()
 	}
 
-	tmpDir := filepath.Join(modRoot, barryTmpDir)
-	if err := os.MkdirAll(tmpDir, os.ModePerm); err != nil {
+	tmpRoot := filepath.Join(modRoot, barryTmpDir)
+
+	hash := sha256.Sum256([]byte(absPath + time.Now().String()))
+	runDir := filepath.Join(tmpRoot, fmt.Sprintf("%x", hash[:8]))
+	if err := os.MkdirAll(runDir, os.ModePerm); err != nil {
 		return nil, fmt.Errorf("could not create temp dir: %w", err)
 	}
 
-	tmpFile := filepath.Join(tmpDir, "main.go")
+	tmpFile := filepath.Join(runDir, "main.go")
 	if err := os.WriteFile(tmpFile, formatted, 0644); err != nil {
 		return nil, fmt.Errorf("could not write temp file: %w", err)
 	}
@@ -108,6 +113,9 @@ func ExecuteServerFile(filePath string, params map[string]string, devMode bool) 
 	}
 
 	err = cmd.Run()
+
+	_ = os.RemoveAll(runDir)
+
 	if err != nil {
 		errText := errBuf.String()
 		if strings.Contains(errText, errorNotFoundMsg) {

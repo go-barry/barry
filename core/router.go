@@ -59,6 +59,7 @@ func (r *statusRecorder) Status() int {
 }
 
 var cacheLocks sync.Map
+var compileLocks sync.Map
 var cacheQueue = make(chan cacheWriteRequest, 100)
 
 type cacheWriteRequest struct {
@@ -71,8 +72,11 @@ type cacheWriteRequest struct {
 func init() {
 	go func() {
 		for req := range cacheQueue {
+			safeHTML := make([]byte, len(req.HTML))
+			copy(safeHTML, req.HTML)
+
 			req.Lock.Lock()
-			_ = SaveCachedHTML(req.Config, req.RouteKey, req.HTML)
+			_ = SaveCachedHTML(req.Config, req.RouteKey, safeHTML)
 			req.Lock.Unlock()
 		}
 	}()
@@ -209,7 +213,10 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 
 	data := map[string]interface{}{}
 	if _, err := os.Stat(serverPath); err == nil {
+		lock := getOrCreateCompileLock(serverPath)
+		lock.Lock()
 		result, err := ExecuteServerFile(serverPath, params, r.env == "dev")
+		lock.Unlock()
 		if err != nil {
 			if IsNotFoundError(err) {
 				r.renderErrorPage(w, http.StatusNotFound, "Page not found", req.URL.Path)
@@ -273,7 +280,7 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		cacheQueue <- cacheWriteRequest{
 			Config:   r.config,
 			RouteKey: routeKey,
-			HTML:     html,
+			HTML:     append([]byte(nil), html...),
 			Lock:     lock,
 		}
 	}
@@ -362,19 +369,14 @@ func (r *Router) watchEverything() {
 	}
 }
 
-func shouldLogRequest(path string) bool {
-	return !strings.HasPrefix(path, "/.well-known") &&
-		!strings.HasPrefix(path, "/favicon.ico") &&
-		!strings.HasPrefix(path, "/robots.txt")
-}
-
-func acceptsGzip(r *http.Request) bool {
-	return strings.Contains(r.Header.Get("Accept-Encoding"), "gzip")
-}
-
-func generateETag(data []byte) string {
-	hash := sha256.Sum256(data)
-	return fmt.Sprintf(`W/"%x"`, hash[:8])
+func getOrCreateCompileLock(key string) *sync.Mutex {
+	lock, ok := compileLocks.Load(key)
+	if ok {
+		return lock.(*sync.Mutex)
+	}
+	mutex := &sync.Mutex{}
+	actual, _ := compileLocks.LoadOrStore(key, mutex)
+	return actual.(*sync.Mutex)
 }
 
 func getOrCreateLock(key string) *sync.Mutex {
@@ -385,6 +387,21 @@ func getOrCreateLock(key string) *sync.Mutex {
 	mutex := &sync.Mutex{}
 	actual, _ := cacheLocks.LoadOrStore(key, mutex)
 	return actual.(*sync.Mutex)
+}
+
+func generateETag(data []byte) string {
+	hash := sha256.Sum256(data)
+	return fmt.Sprintf(`W/"%x"`, hash[:8])
+}
+
+func shouldLogRequest(path string) bool {
+	return !strings.HasPrefix(path, "/.well-known") &&
+		!strings.HasPrefix(path, "/favicon.ico") &&
+		!strings.HasPrefix(path, "/robots.txt")
+}
+
+func acceptsGzip(r *http.Request) bool {
+	return strings.Contains(r.Header.Get("Accept-Encoding"), "gzip")
 }
 
 func hashTemplateFiles(paths []string) string {
