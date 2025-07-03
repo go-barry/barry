@@ -244,8 +244,8 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 			http.Error(w, "Template error: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		r.templateCache.Store(cacheKey, parsed)
-		tmpl = parsed
+		actual, _ := r.templateCache.LoadOrStore(cacheKey, parsed)
+		tmpl = actual.(*template.Template)
 	}
 
 	var rendered bytes.Buffer
@@ -433,8 +433,8 @@ func (r *Router) getLayoutPath(file string) string {
 		line := strings.TrimSpace(scanner.Text())
 		if strings.HasPrefix(line, "<!-- layout:") && strings.HasSuffix(line, "-->") {
 			layout := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "<!-- layout:"), "-->"))
-			r.layoutCache.Store(file, layout)
-			return layout
+			actual, _ := r.layoutCache.LoadOrStore(file, layout)
+			return actual.(string)
 		}
 	}
 
@@ -442,8 +442,8 @@ func (r *Router) getLayoutPath(file string) string {
 		fmt.Printf("❌ Error scanning %s for layout directive: %v\n", file, err)
 	}
 
-	r.layoutCache.Store(file, "")
-	return ""
+	actual, _ := r.layoutCache.LoadOrStore(file, "")
+	return actual.(string)
 }
 
 func (r *Router) renderErrorPage(w http.ResponseWriter, status int, message, path string) {
