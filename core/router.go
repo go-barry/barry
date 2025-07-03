@@ -277,12 +277,26 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 
 	if r.config.CacheEnabled {
 		lock := getOrCreateLock(routeKey)
-		cacheQueue <- cacheWriteRequest{
+		req := cacheWriteRequest{
 			Config:   r.config,
 			RouteKey: routeKey,
 			HTML:     append([]byte(nil), html...),
 			Lock:     lock,
 		}
+
+		select {
+		case cacheQueue <- req:
+		default:
+			if r.env == "dev" || r.config.DebugHeaders {
+				fmt.Printf("⚠️  Cache queue full — skipping write for route: %s\n", routeKey)
+			}
+			go func() {
+				req.Lock.Lock()
+				_ = SaveCachedHTML(req.Config, req.RouteKey, req.HTML)
+				req.Lock.Unlock()
+			}()
+		}
+
 	}
 }
 
