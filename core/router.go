@@ -180,6 +180,9 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 			if data, err := os.ReadFile(gzFile); err == nil {
 				etag := generateETag(data)
 				if match := req.Header.Get("If-None-Match"); match == etag {
+					if r.env == "prod" || r.config.DebugLogs {
+						fmt.Printf("🧩 304 Not Modified (gzip): /%s\n", routeKey)
+					}
 					w.WriteHeader(http.StatusNotModified)
 					return
 				}
@@ -190,6 +193,9 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 				if r.config.DebugHeaders {
 					w.Header().Set("X-Barry-Cache", "HIT")
 				}
+				if r.env == "prod" || r.config.DebugLogs {
+					fmt.Printf("📦 Cache HIT (gzip): /%s\n", routeKey)
+				}
 				w.Write(data)
 				return
 			}
@@ -198,6 +204,9 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		if data, err := os.ReadFile(cachedFile); err == nil {
 			etag := generateETag(data)
 			if match := req.Header.Get("If-None-Match"); match == etag {
+				if r.env == "prod" || r.config.DebugLogs {
+					fmt.Printf("🧩 304 Not Modified: /%s\n", routeKey)
+				}
 				w.WriteHeader(http.StatusNotModified)
 				return
 			}
@@ -206,9 +215,13 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 			if r.config.DebugHeaders {
 				w.Header().Set("X-Barry-Cache", "HIT")
 			}
+			if r.env == "prod" || r.config.DebugLogs {
+				fmt.Printf("📦 Cache HIT: /%s\n", routeKey)
+			}
 			w.Write(data)
 			return
 		}
+
 	}
 
 	data := map[string]interface{}{}
@@ -241,6 +254,7 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		tmpl = template.New("").Funcs(BarryTemplateFuncs(r.env, r.config.OutputDir))
 		parsed, err := tmpl.ParseFiles(tmplFiles...)
 		if err != nil {
+			fmt.Printf("❌ Template parse error [%s]: %v\n", cacheKey, err)
 			http.Error(w, "Template error: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -286,17 +300,24 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 
 		select {
 		case cacheQueue <- req:
+			if r.config.DebugLogs {
+				fmt.Printf("📝 Enqueued cache write: /%s\n", routeKey)
+			}
 		default:
-			if r.env == "dev" || r.config.DebugHeaders {
-				fmt.Printf("⚠️  Cache queue full — skipping write for route: %s\n", routeKey)
+			if r.config.DebugLogs {
+				fmt.Printf("⚠️  Cache queue full — writing immediately for: /%s\n", routeKey)
 			}
 			go func() {
 				req.Lock.Lock()
-				_ = SaveCachedHTML(req.Config, req.RouteKey, req.HTML)
+				err := SaveCachedHTML(req.Config, req.RouteKey, req.HTML)
 				req.Lock.Unlock()
+				if err != nil {
+					fmt.Printf("❌ Cache write failed (immediate): /%s → %v\n", req.RouteKey, err)
+				} else {
+					fmt.Printf("✅ Cache write complete (immediate): /%s\n", req.RouteKey)
+				}
 			}()
 		}
-
 	}
 }
 

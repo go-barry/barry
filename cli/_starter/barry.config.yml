@@ -1,3 +1,4 @@
 outputDir: ./cache
 cache: false
 debugHeaders: true
+debugLogs: true

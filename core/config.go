@@ -10,6 +10,7 @@ type Config struct {
 	OutputDir    string `yaml:"outputDir"`
 	CacheEnabled bool   `yaml:"cache"`
 	DebugHeaders bool   `yaml:"debugHeaders"`
+	DebugLogs    bool   `yaml:"debugLogs"`
 }
 
 func LoadConfig(path string) Config {
@@ -19,6 +20,7 @@ func LoadConfig(path string) Config {
 			OutputDir:    "./cache",
 			CacheEnabled: false,
 			DebugHeaders: false,
+			DebugLogs:    false,
 		}
 	}
 
