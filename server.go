@@ -17,134 +17,143 @@ type RuntimeConfig struct {
 }
 
 func Start(cfg RuntimeConfig) {
-	fmt.Println("Starting Barry in", cfg.Env, "mode...")
+	fmt.Println("🚀 Starting Barry in", cfg.Env, "mode...")
 
 	config := core.LoadConfig("barry.config.yml")
 	config.CacheEnabled = cfg.EnableCache
 
 	mux := http.NewServeMux()
-
 	publicDir := "public"
 	cacheStaticDir := filepath.Join(config.OutputDir, "static")
 
 	if cfg.Env == "dev" {
-		staticHandler := http.StripPrefix("/static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Cache-Control", "no-store")
-			http.FileServer(http.Dir(publicDir)).ServeHTTP(w, r)
-		}))
-		mux.Handle("/static/", staticHandler)
-
-		mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Cache-Control", "no-store")
-			http.ServeFile(w, r, filepath.Join(publicDir, "favicon.ico"))
-		})
-
-		mux.HandleFunc("/robots.txt", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Cache-Control", "no-store")
-			http.ServeFile(w, r, filepath.Join(publicDir, "robots.txt"))
-		})
+		setupDevStaticRoutes(mux, publicDir)
 	} else {
-		mux.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
-			uri := r.URL.Path
-			if i := strings.Index(uri, "?"); i != -1 {
-				uri = uri[:i]
-			}
-			trimmed := strings.TrimPrefix(uri, "/static/")
-			cachedFile := filepath.Join(cacheStaticDir, trimmed)
-			gzipFile := cachedFile + ".gz"
-
-			if acceptsGzip(r) {
-				if _, err := os.Stat(gzipFile); err == nil {
-					ext := filepath.Ext(cachedFile)
-					switch ext {
-					case ".css":
-						w.Header().Set("Content-Type", "text/css")
-					case ".js":
-						w.Header().Set("Content-Type", "application/javascript")
-					case ".webp":
-						w.Header().Set("Content-Type", "image/webp")
-					case ".svg":
-						w.Header().Set("Content-Type", "image/svg+xml")
-					case ".png":
-						w.Header().Set("Content-Type", "image/png")
-					case ".jpg", ".jpeg":
-						w.Header().Set("Content-Type", "image/jpeg")
-					default:
-						w.Header().Set("Content-Type", "application/octet-stream")
-					}
-					w.Header().Set("Content-Encoding", "gzip")
-					w.Header().Set("Vary", "Accept-Encoding")
-					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-					http.ServeFile(w, r, gzipFile)
-					return
-				}
-			}
-
-			if _, err := os.Stat(cachedFile); err == nil {
-				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-				http.ServeFile(w, r, cachedFile)
-				return
-			}
-
-			publicFile := filepath.Join(publicDir, trimmed)
-			if _, err := os.Stat(publicFile); err == nil {
-				ext := filepath.Ext(publicFile)
-				switch ext {
-				case ".webp":
-					w.Header().Set("Content-Type", "image/webp")
-				case ".svg":
-					w.Header().Set("Content-Type", "image/svg+xml")
-				case ".png":
-					w.Header().Set("Content-Type", "image/png")
-				case ".jpg", ".jpeg":
-					w.Header().Set("Content-Type", "image/jpeg")
-				case ".woff":
-					w.Header().Set("Content-Type", "font/woff")
-				case ".woff2":
-					w.Header().Set("Content-Type", "font/woff2")
-				}
-				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-				http.ServeFile(w, r, publicFile)
-				return
-			}
-
-			http.NotFound(w, r)
-		})
-
+		mux.HandleFunc("/static/", makeStaticHandler(publicDir, cacheStaticDir))
 		mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-			http.ServeFile(w, r, filepath.Join(publicDir, "favicon.ico"))
+			serveFileWithHeaders(w, filepath.Join(publicDir, "favicon.ico"), "public, max-age=31536000, immutable")
 		})
-
 		mux.HandleFunc("/robots.txt", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-			http.ServeFile(w, r, filepath.Join(publicDir, "robots.txt"))
+			serveFileWithHeaders(w, filepath.Join(publicDir, "robots.txt"), "public, max-age=31536000, immutable")
 		})
 	}
 
+	router := core.NewRouter(config, core.RuntimeContext{
+		Env:         cfg.Env,
+		EnableWatch: cfg.Env == "dev",
+		OnReload:    nil,
+	})
+
 	if cfg.Env == "dev" {
 		reloader := core.NewLiveReloader()
-		mux.HandleFunc("/__barry_reload", reloader.Handler)
-
-		router := core.NewRouter(config, core.RuntimeContext{
+		router = core.NewRouter(config, core.RuntimeContext{
 			Env:         cfg.Env,
 			EnableWatch: true,
 			OnReload:    reloader.BroadcastReload,
 		})
-		mux.Handle("/", router)
-	} else {
-		router := core.NewRouter(config, core.RuntimeContext{
-			Env:         cfg.Env,
-			EnableWatch: false,
-			OnReload:    nil,
-		})
-		mux.Handle("/", router)
+		mux.HandleFunc("/__barry_reload", reloader.Handler)
 	}
 
-	fmt.Printf("✅ Barry running at http://localhost:%d\n", cfg.Port)
-	http.ListenAndServe(fmt.Sprintf(":%d", cfg.Port), mux)
+	mux.Handle("/", router)
+
+	addr := fmt.Sprintf(":%d", cfg.Port)
+	fmt.Printf("✅ Barry running at http://localhost%s\n", addr)
+	if err := http.ListenAndServe(addr, mux); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Server failed: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 func acceptsGzip(r *http.Request) bool {
 	return strings.Contains(r.Header.Get("Accept-Encoding"), "gzip")
+}
+
+func makeStaticHandler(publicDir, cacheStaticDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uri := r.URL.Path
+		if i := strings.Index(uri, "?"); i != -1 {
+			uri = uri[:i]
+		}
+		trimmed := strings.TrimPrefix(uri, "/static/")
+
+		if strings.Contains(trimmed, "..") {
+			http.Error(w, "Invalid path", http.StatusBadRequest)
+			return
+		}
+
+		cachedFile := filepath.Join(cacheStaticDir, trimmed)
+		gzFile := cachedFile + ".gz"
+
+		if acceptsGzip(r) {
+			if _, err := os.Stat(gzFile); err == nil {
+				w.Header().Set("Content-Type", detectMimeType(cachedFile))
+				w.Header().Set("Content-Encoding", "gzip")
+				w.Header().Set("Vary", "Accept-Encoding")
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				http.ServeFile(w, r, gzFile)
+				return
+			}
+		}
+
+		if _, err := os.Stat(cachedFile); err == nil {
+			serveFileWithHeaders(w, cachedFile, "public, max-age=31536000, immutable")
+			return
+		}
+
+		publicFile := filepath.Join(publicDir, trimmed)
+		if _, err := os.Stat(publicFile); err == nil {
+			serveFileWithHeaders(w, publicFile, "public, max-age=31536000, immutable")
+			return
+		}
+
+		fmt.Printf("🛑 Static asset not found: %s\n", r.URL.Path)
+		http.NotFound(w, r)
+	}
+}
+
+func detectMimeType(path string) string {
+	switch ext := strings.ToLower(filepath.Ext(path)); ext {
+	case ".css":
+		return "text/css"
+	case ".js":
+		return "application/javascript"
+	case ".webp":
+		return "image/webp"
+	case ".svg":
+		return "image/svg+xml"
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".woff":
+		return "font/woff"
+	case ".woff2":
+		return "font/woff2"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+func serveFileWithHeaders(w http.ResponseWriter, filePath, cacheControl string) {
+	w.Header().Set("Cache-Control", cacheControl)
+	w.Header().Set("Content-Type", detectMimeType(filePath))
+	http.ServeFile(w, nil, filePath)
+}
+
+func setupDevStaticRoutes(mux *http.ServeMux, publicDir string) {
+	staticHandler := http.StripPrefix("/static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		http.FileServer(http.Dir(publicDir)).ServeHTTP(w, r)
+	}))
+	mux.Handle("/static/", staticHandler)
+
+	mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		http.ServeFile(w, r, filepath.Join(publicDir, "favicon.ico"))
+	})
+
+	mux.HandleFunc("/robots.txt", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		http.ServeFile(w, r, filepath.Join(publicDir, "robots.txt"))
+	})
 }
