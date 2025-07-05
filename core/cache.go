@@ -26,6 +26,10 @@ func SaveCachedHTML(config Config, routeKey string, html []byte) error {
 	htmlPath := filepath.Join(outDir, "index.html")
 	gzPath := htmlPath + ".gz"
 
+	if err := os.WriteFile(htmlPath, html, 0644); err != nil {
+		return fmt.Errorf("failed to write index.html: %w", err)
+	}
+
 	f, err := os.Create(gzPath)
 	if err != nil {
 		return fmt.Errorf("failed to create gzip file: %w", err)

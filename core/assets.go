@@ -67,6 +67,10 @@ func MinifyAsset(env, path string, cacheDir string) string {
 		return path
 	}
 
+	if err := os.WriteFile(min, minified, 0644); err != nil {
+		return path
+	}
+
 	if f, err := os.Create(minGz); err == nil {
 		defer f.Close()
 		gz := gzip.NewWriter(f)
