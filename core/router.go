@@ -82,7 +82,7 @@ func init() {
 	}()
 }
 
-func NewRouter(config Config, ctx RuntimeContext) *Router {
+var NewRouter = func(config Config, ctx RuntimeContext) http.Handler {
 	r := &Router{
 		config:   config,
 		env:      ctx.Env,

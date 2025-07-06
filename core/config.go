@@ -13,10 +13,10 @@ type Config struct {
 	DebugLogs    bool   `yaml:"debugLogs"`
 }
 
-func LoadConfig(path string) Config {
+var LoadConfig = func(path string) *Config {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Config{
+		return &Config{
 			OutputDir:    "./cache",
 			CacheEnabled: false,
 			DebugHeaders: false,
@@ -31,5 +31,5 @@ func LoadConfig(path string) Config {
 		cfg.OutputDir = "./cache"
 	}
 
-	return cfg
+	return &cfg
 }

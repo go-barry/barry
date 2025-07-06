@@ -16,7 +16,20 @@ type RuntimeConfig struct {
 	Port        int
 }
 
+var ListenAndServe = http.ListenAndServe
+var Exit = os.Exit
+
 var Start = func(cfg RuntimeConfig) {
+	addr, handler := BuildServer(cfg)
+	fmt.Printf("✅ Barry running at http://localhost%s\n", addr)
+
+	if err := ListenAndServe(addr, handler); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Server failed: %v\n", err)
+		Exit(1)
+	}
+}
+
+func BuildServer(cfg RuntimeConfig) (string, http.Handler) {
 	fmt.Println("🚀 Starting Barry in", cfg.Env, "mode...")
 
 	config := core.LoadConfig("barry.config.yml")
@@ -38,7 +51,7 @@ var Start = func(cfg RuntimeConfig) {
 		})
 	}
 
-	router := core.NewRouter(config, core.RuntimeContext{
+	router := core.NewRouter(*config, core.RuntimeContext{
 		Env:         cfg.Env,
 		EnableWatch: cfg.Env == "dev",
 		OnReload:    nil,
@@ -46,7 +59,7 @@ var Start = func(cfg RuntimeConfig) {
 
 	if cfg.Env == "dev" {
 		reloader := core.NewLiveReloader()
-		router = core.NewRouter(config, core.RuntimeContext{
+		router = core.NewRouter(*config, core.RuntimeContext{
 			Env:         cfg.Env,
 			EnableWatch: true,
 			OnReload:    reloader.BroadcastReload,
@@ -57,11 +70,7 @@ var Start = func(cfg RuntimeConfig) {
 	mux.Handle("/", router)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
-	fmt.Printf("✅ Barry running at http://localhost%s\n", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Server failed: %v\n", err)
-		os.Exit(1)
-	}
+	return addr, mux
 }
 
 func acceptsGzip(r *http.Request) bool {
@@ -71,9 +80,6 @@ func acceptsGzip(r *http.Request) bool {
 func makeStaticHandler(publicDir, cacheStaticDir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		uri := r.URL.Path
-		if i := strings.Index(uri, "?"); i != -1 {
-			uri = uri[:i]
-		}
 		trimmed := strings.TrimPrefix(uri, "/static/")
 
 		if strings.Contains(trimmed, "..") {

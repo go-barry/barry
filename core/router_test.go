@@ -60,7 +60,7 @@ func TestRouter_ServesMatchingRoute(t *testing.T) {
 	cfg, cleanup := setupRouterTestEnv(t)
 	defer cleanup()
 
-	router := NewRouter(cfg, RuntimeContext{Env: "dev"})
+	router := NewRouter(cfg, RuntimeContext{Env: "dev"}).(*Router)
 
 	router.routes = []Route{
 		{
@@ -132,7 +132,7 @@ func TestRouter_ParseLayoutDirective(t *testing.T) {
 	cfg, cleanup := setupRouterTestEnv(t)
 	defer cleanup()
 
-	router := NewRouter(cfg, RuntimeContext{Env: "dev"})
+	router := NewRouter(cfg, RuntimeContext{Env: "dev"}).(*Router)
 	layout := router.getLayoutPath("routes/test/index.html")
 
 	if layout != "layout.html" {

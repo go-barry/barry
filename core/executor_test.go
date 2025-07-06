@@ -41,19 +41,16 @@ func TestFindGoModRoot(t *testing.T) {
 func TestExecuteServerFile_BasicSuccess(t *testing.T) {
 	tmp := t.TempDir()
 
-	// Set up go.mod in root of tmp
 	goMod := []byte("module example.com/barrytest\n\ngo 1.20\n")
 	if err := os.WriteFile(filepath.Join(tmp, "go.mod"), goMod, 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	// Set up nested route dir
 	routeDir := filepath.Join(tmp, "routes", "foo")
 	if err := os.MkdirAll(routeDir, 0755); err != nil {
 		t.Fatal(err)
 	}
 
-	// Write valid Go server file
 	serverCode := `package foo
 
 import "net/http"
