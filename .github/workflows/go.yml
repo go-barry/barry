@@ -27,3 +27,5 @@ jobs:
       uses: codecov/codecov-action@v5
       with:
         files: coverage.out
+        token: ${{ secrets.CODECOV_TOKEN }}
+        slug: go-barry/barry
