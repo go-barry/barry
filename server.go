@@ -16,7 +16,7 @@ type RuntimeConfig struct {
 	Port        int
 }
 
-func Start(cfg RuntimeConfig) {
+var Start = func(cfg RuntimeConfig) {
 	fmt.Println("🚀 Starting Barry in", cfg.Env, "mode...")
 
 	config := core.LoadConfig("barry.config.yml")
@@ -31,10 +31,10 @@ func Start(cfg RuntimeConfig) {
 	} else {
 		mux.HandleFunc("/static/", makeStaticHandler(publicDir, cacheStaticDir))
 		mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
-			serveFileWithHeaders(w, filepath.Join(publicDir, "favicon.ico"), "public, max-age=31536000, immutable")
+			serveFileWithHeaders(w, r, filepath.Join(publicDir, "favicon.ico"), "public, max-age=31536000, immutable")
 		})
 		mux.HandleFunc("/robots.txt", func(w http.ResponseWriter, r *http.Request) {
-			serveFileWithHeaders(w, filepath.Join(publicDir, "robots.txt"), "public, max-age=31536000, immutable")
+			serveFileWithHeaders(w, r, filepath.Join(publicDir, "robots.txt"), "public, max-age=31536000, immutable")
 		})
 	}
 
@@ -96,13 +96,13 @@ func makeStaticHandler(publicDir, cacheStaticDir string) http.HandlerFunc {
 		}
 
 		if _, err := os.Stat(cachedFile); err == nil {
-			serveFileWithHeaders(w, cachedFile, "public, max-age=31536000, immutable")
+			serveFileWithHeaders(w, r, cachedFile, "public, max-age=31536000, immutable")
 			return
 		}
 
 		publicFile := filepath.Join(publicDir, trimmed)
 		if _, err := os.Stat(publicFile); err == nil {
-			serveFileWithHeaders(w, publicFile, "public, max-age=31536000, immutable")
+			serveFileWithHeaders(w, r, publicFile, "public, max-age=31536000, immutable")
 			return
 		}
 
@@ -134,10 +134,10 @@ func detectMimeType(path string) string {
 	}
 }
 
-func serveFileWithHeaders(w http.ResponseWriter, filePath, cacheControl string) {
+func serveFileWithHeaders(w http.ResponseWriter, r *http.Request, filePath, cacheControl string) {
 	w.Header().Set("Cache-Control", cacheControl)
 	w.Header().Set("Content-Type", detectMimeType(filePath))
-	http.ServeFile(w, nil, filePath)
+	http.ServeFile(w, r, filePath)
 }
 
 func setupDevStaticRoutes(mux *http.ServeMux, publicDir string) {
