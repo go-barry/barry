@@ -7,13 +7,18 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+type LiveReloaderInterface interface {
+	BroadcastReload()
+	Handler(http.ResponseWriter, *http.Request)
+}
+
 type LiveReloader struct {
 	clients  map[*websocket.Conn]bool
 	lock     sync.Mutex
 	upgrader websocket.Upgrader
 }
 
-func NewLiveReloader() *LiveReloader {
+var NewLiveReloader = func() LiveReloaderInterface {
 	return &LiveReloader{
 		clients: make(map[*websocket.Conn]bool),
 		upgrader: websocket.Upgrader{

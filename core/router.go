@@ -58,16 +58,18 @@ func (r *statusRecorder) Status() int {
 	return r.status
 }
 
-var cacheLocks sync.Map
-var compileLocks sync.Map
-var cacheQueue = make(chan cacheWriteRequest, 100)
-
 type cacheWriteRequest struct {
 	Config   Config
 	RouteKey string
 	HTML     []byte
 	Lock     *sync.Mutex
 }
+
+var cacheLocks sync.Map
+var compileLocks sync.Map
+var cacheQueue = make(chan cacheWriteRequest, 100)
+var SaveCachedHTMLFunc = SaveCachedHTML
+var newWatcher = fsnotify.NewWatcher
 
 func init() {
 	go func() {
@@ -76,13 +78,13 @@ func init() {
 			copy(safeHTML, req.HTML)
 
 			req.Lock.Lock()
-			_ = SaveCachedHTML(req.Config, req.RouteKey, safeHTML)
+			_ = SaveCachedHTMLFunc(req.Config, req.RouteKey, safeHTML)
 			req.Lock.Unlock()
 		}
 	}()
 }
 
-func NewRouter(config Config, ctx RuntimeContext) *Router {
+var NewRouter = func(config Config, ctx RuntimeContext) http.Handler {
 	r := &Router{
 		config:   config,
 		env:      ctx.Env,
@@ -246,7 +248,19 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 	}
 
 	layoutPath := r.getLayoutPath(htmlPath)
-	tmplFiles := append([]string{}, layoutPath, htmlPath)
+	tmplFiles := []string{}
+
+	if layoutPath != "" {
+		if _, err := os.Stat(layoutPath); err == nil {
+			tmplFiles = append(tmplFiles, layoutPath)
+		} else {
+			if r.config.DebugLogs {
+				fmt.Printf("⚠️ Skipping missing layout: %q\n", layoutPath)
+			}
+		}
+	}
+
+	tmplFiles = append(tmplFiles, htmlPath)
 	tmplFiles = append(tmplFiles, r.componentFiles...)
 
 	cacheKey := hashTemplateFiles(tmplFiles)
@@ -256,6 +270,7 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		tmpl = val.(*template.Template)
 	} else {
 		tmpl = template.New("").Funcs(BarryTemplateFuncs(r.env, r.config.OutputDir))
+
 		parsed, err := tmpl.ParseFiles(tmplFiles...)
 		if err != nil {
 			fmt.Printf("❌ Template parse error [%s]: %v\n", cacheKey, err)
@@ -313,7 +328,7 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 			}
 			go func() {
 				req.Lock.Lock()
-				err := SaveCachedHTML(req.Config, req.RouteKey, req.HTML)
+				err := SaveCachedHTMLFunc(req.Config, req.RouteKey, req.HTML)
 				req.Lock.Unlock()
 				if err != nil {
 					fmt.Printf("❌ Cache write failed (immediate): /%s → %v\n", req.RouteKey, err)
@@ -357,7 +372,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Router) watchEverything() {
-	watcher, err := fsnotify.NewWatcher()
+	watcher, err := newWatcher()
 	if err != nil {
 		return
 	}
@@ -501,23 +516,42 @@ func (r *Router) renderErrorPage(w http.ResponseWriter, status int, message, pat
 	tryRender := func(file string) bool {
 		layoutPath := r.getLayoutPath(file)
 
-		count := 1 + len(r.componentFiles)
+		tmplFiles := []string{}
+
 		if layoutPath != "" {
-			count++
+			if _, err := os.Stat(layoutPath); err == nil {
+				tmplFiles = append(tmplFiles, layoutPath)
+			} else {
+				fmt.Printf("⚠️ Skipping missing layout: %q\n", layoutPath)
+			}
 		}
 
-		tmplFiles := make([]string, 0, count)
-		if layoutPath != "" {
-			tmplFiles = append(tmplFiles, layoutPath)
+		if file != "" {
+			if _, err := os.Stat(file); err == nil {
+				tmplFiles = append(tmplFiles, file)
+			} else {
+				fmt.Printf("⚠️ Skipping missing error template: %s\n", file)
+			}
 		}
-		tmplFiles = append(tmplFiles, file)
-		tmplFiles = append(tmplFiles, r.componentFiles...)
+
+		for _, f := range r.componentFiles {
+			if f != "" {
+				tmplFiles = append(tmplFiles, f)
+			}
+		}
+
+		if len(tmplFiles) == 0 {
+			http.Error(w, "Internal server error: no template files to parse", http.StatusInternalServerError)
+			return false
+		}
 
 		name := filepath.Base(file)
-		tmpl := template.New(name).Funcs(BarryTemplateFuncs(r.env, r.config.OutputDir))
+
+		tmpl := template.New("").Funcs(BarryTemplateFuncs(r.env, r.config.OutputDir))
 		tmpl, err := tmpl.ParseFiles(tmplFiles...)
 		if err != nil {
 			fmt.Println("❌ Error parsing error page:", err)
+			http.Error(w, "Template error: "+err.Error(), http.StatusInternalServerError)
 			return false
 		}
 
@@ -531,8 +565,10 @@ func (r *Router) renderErrorPage(w http.ResponseWriter, status int, message, pat
 
 		if err != nil {
 			fmt.Println("❌ Error executing error template:", err)
+			http.Error(w, "Template execution error: "+err.Error(), http.StatusInternalServerError)
 			return false
 		}
+
 		return true
 	}
 

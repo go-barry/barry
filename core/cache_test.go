@@ -3,9 +3,11 @@ package core
 import (
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -70,5 +72,88 @@ func TestGetCachedHTML_MissingFile(t *testing.T) {
 	}
 	if data != nil {
 		t.Errorf("Expected nil data for missing file")
+	}
+}
+
+func TestSaveCachedHTML_CreateDirFails(t *testing.T) {
+	tmpDir := t.TempDir()
+	badPath := filepath.Join(tmpDir, "conflict")
+	if err := os.WriteFile(badPath, []byte("file blocks dir"), 0644); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+
+	cfg := Config{OutputDir: badPath}
+	err := SaveCachedHTML(cfg, "route", []byte("<html></html>"))
+	if err == nil || !strings.Contains(err.Error(), "failed to create cache directory") {
+		t.Errorf("expected directory creation error, got: %v", err)
+	}
+}
+
+func TestSaveCachedHTML_WriteHTMLFails(t *testing.T) {
+	tmpDir := t.TempDir()
+	routePath := filepath.Join(tmpDir, "readonly")
+	if err := os.MkdirAll(routePath, 0400); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	defer os.Chmod(routePath, 0755)
+
+	cfg := Config{OutputDir: tmpDir}
+	err := SaveCachedHTML(cfg, "readonly", []byte("<html></html>"))
+	if err == nil || !strings.Contains(err.Error(), "failed to write index.html") {
+		t.Errorf("expected HTML write error, got: %v", err)
+	}
+}
+
+func TestSaveCachedHTML_CreateGzipFails(t *testing.T) {
+	tmpDir := t.TempDir()
+	route := "gzipdir"
+	routeDir := filepath.Join(tmpDir, route)
+
+	if err := os.MkdirAll(routeDir, 0755); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+
+	htmlPath := filepath.Join(routeDir, "index.html")
+	if err := os.WriteFile(htmlPath, []byte("<html>ok</html>"), 0644); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+
+	gzPath := filepath.Join(routeDir, "index.html.gz")
+	if err := os.MkdirAll(gzPath, 0755); err != nil {
+		t.Fatalf("failed to create dir at .gz path: %v", err)
+	}
+
+	cfg := Config{OutputDir: tmpDir}
+	err := SaveCachedHTML(cfg, route, []byte("<html>will fail gz create</html>"))
+
+	if err == nil || !strings.Contains(err.Error(), "failed to create gzip file") {
+		t.Errorf("Expected gzip create failure, got: %v", err)
+	}
+}
+
+type failingWriter struct{}
+
+func (f *failingWriter) Write(p []byte) (int, error) {
+	return 0, fmt.Errorf("simulated write failure")
+}
+
+func (f *failingWriter) Close() error {
+	return nil
+}
+
+func TestSaveCachedHTML_GzipWriteFails(t *testing.T) {
+	originalFactory := gzipWriterFactory
+	defer func() { gzipWriterFactory = originalFactory }()
+
+	gzipWriterFactory = func(w io.Writer) io.WriteCloser {
+		return &failingWriter{}
+	}
+
+	tmpDir := t.TempDir()
+	cfg := Config{OutputDir: tmpDir}
+	err := SaveCachedHTML(cfg, "write-error", []byte("<html>failure</html>"))
+
+	if err == nil || !strings.Contains(err.Error(), "failed to write gzipped html") {
+		t.Errorf("Expected gzip write failure, got: %v", err)
 	}
 }
