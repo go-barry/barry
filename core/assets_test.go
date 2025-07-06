@@ -134,3 +134,140 @@ func TestBarryTemplateFuncs_versionedFallback(t *testing.T) {
 		t.Errorf("expected fallback to original path, got %s", result)
 	}
 }
+
+func TestMinifyAsset_UnsupportedExtensionReturnsOriginal(t *testing.T) {
+	result := MinifyAsset("prod", "/static/image.png", t.TempDir())
+	if result != "/static/image.png" {
+		t.Errorf("expected original path for unsupported extension, got %s", result)
+	}
+}
+
+func TestMinifyAsset_AlreadyMinifiedReturnsOriginal(t *testing.T) {
+	result := MinifyAsset("prod", "/static/app.min.js", t.TempDir())
+	if result != "/static/app.min.js" {
+		t.Errorf("expected original path for .min.js, got %s", result)
+	}
+}
+
+func TestMinifyAsset_MissingSourceFileReturnsOriginal(t *testing.T) {
+	result := MinifyAsset("prod", "/static/missing.css", t.TempDir())
+	if result != "/static/missing.css" {
+		t.Errorf("expected fallback on missing source file, got %s", result)
+	}
+}
+
+func TestMinifyAsset_MinifyErrorReturnsOriginal(t *testing.T) {
+	tmpCache := t.TempDir()
+	publicDir := filepath.Join(".", "public")
+	err := os.MkdirAll(publicDir, 0755)
+	if err != nil {
+		t.Fatalf("failed to create public dir: %v", err)
+	}
+	sourcePath := filepath.Join(publicDir, "broken.js")
+	t.Cleanup(func() { _ = os.RemoveAll(publicDir) })
+
+	err = os.WriteFile(sourcePath, []byte("function(){"), 0644)
+	if err != nil {
+		t.Fatalf("failed to write JS: %v", err)
+	}
+
+	result := MinifyAsset("prod", "/static/broken.js", tmpCache)
+
+	if result != "/static/broken.js" {
+		t.Errorf("expected fallback for minify error, got %s", result)
+	}
+}
+
+func TestBarryTemplateFuncs_propsPanicsOnNonStringKey(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic on non-string key")
+		}
+	}()
+	propsFunc := BarryTemplateFuncs("prod", ".")["props"].(func(...interface{}) map[string]interface{})
+	propsFunc(123, "value")
+}
+
+func TestBarryTemplateFuncs_versionedPublicFallback(t *testing.T) {
+	tmp := t.TempDir()
+
+	publicDir := filepath.Join(".", "public")
+	_ = os.MkdirAll(publicDir, 0755)
+	t.Cleanup(func() { _ = os.RemoveAll("public") })
+
+	filePath := filepath.Join(publicDir, "a.js")
+	err := os.WriteFile(filePath, []byte("abc"), 0644)
+	if err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	versioned := BarryTemplateFuncs("prod", tmp)["versioned"].(func(string) string)
+	result := versioned("/static/a.js")
+
+	if !strings.HasPrefix(result, "/static/a.js?v=") {
+		t.Errorf("expected versioned path from public dir, got %s", result)
+	}
+}
+
+func TestMinifyAsset_MkdirAllFails_ReturnsOriginal(t *testing.T) {
+	tmp := t.TempDir()
+	invalidDir := filepath.Join(tmp, "invalid-cache")
+
+	_ = os.WriteFile(invalidDir, []byte("not a dir"), 0644)
+
+	publicPath := filepath.Join("public", "test.css")
+	_ = os.MkdirAll(filepath.Dir(publicPath), 0755)
+	_ = os.WriteFile(publicPath, []byte("body { color: red; }"), 0644)
+	t.Cleanup(func() { _ = os.RemoveAll("public") })
+
+	result := MinifyAsset("prod", "/static/test.css", invalidDir)
+
+	if result != "/static/test.css" {
+		t.Errorf("expected fallback to original path, got %s", result)
+	}
+}
+
+func TestMinifyAsset_WriteFileFails_ReturnsOriginal(t *testing.T) {
+	tmp := t.TempDir()
+
+	readonlyDir := filepath.Join(tmp, "static")
+	_ = os.MkdirAll(readonlyDir, 0555)
+
+	publicPath := filepath.Join("public", "blocked.css")
+	_ = os.MkdirAll(filepath.Dir(publicPath), 0755)
+	_ = os.WriteFile(publicPath, []byte("body { color: red; }"), 0644)
+	t.Cleanup(func() { _ = os.RemoveAll("public") })
+
+	result := MinifyAsset("prod", "/static/blocked.css", tmp)
+
+	if result != "/static/blocked.css" {
+		t.Errorf("expected fallback to original path, got %s", result)
+	}
+}
+
+func TestBarryTemplateFuncs_minify(t *testing.T) {
+	tmp := t.TempDir()
+
+	publicPath := filepath.Join("public", "style.css")
+	_ = os.MkdirAll(filepath.Dir(publicPath), 0755)
+	_ = os.WriteFile(publicPath, []byte("body { color: blue; }"), 0644)
+	t.Cleanup(func() { _ = os.RemoveAll("public") })
+
+	minifyFunc := BarryTemplateFuncs("prod", tmp)["minify"].(func(string) string)
+	result := minifyFunc("/static/style.css")
+
+	if !strings.HasPrefix(result, "/static/style.min.css?v=") {
+		t.Errorf("unexpected minify result: %s", result)
+	}
+}
+
+func TestBarryTemplateFuncs_versionedSkipsNonStatic(t *testing.T) {
+	versioned := BarryTemplateFuncs("prod", ".")["versioned"].(func(string) string)
+
+	input := "/not-static/app.js"
+	result := versioned(input)
+
+	if result != input {
+		t.Errorf("expected original path, got %s", result)
+	}
+}

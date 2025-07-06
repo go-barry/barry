@@ -3,9 +3,14 @@ package core
 import (
 	"compress/gzip"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
+
+var gzipWriterFactory = func(w io.Writer) io.WriteCloser {
+	return gzip.NewWriter(w)
+}
 
 func GetCachedHTML(config Config, route string) ([]byte, bool) {
 	cachePath := filepath.Join(config.OutputDir, route, "index.html")
@@ -36,7 +41,7 @@ func SaveCachedHTML(config Config, routeKey string, html []byte) error {
 	}
 	defer f.Close()
 
-	gz := gzip.NewWriter(f)
+	gz := gzipWriterFactory(f)
 	defer gz.Close()
 
 	if _, err := gz.Write(html); err != nil {
