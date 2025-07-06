@@ -53,7 +53,12 @@ var CheckCommand = &cli.Command{
 				files = append([]string{layoutPath}, files...)
 			}
 
-			rel := strings.TrimPrefix(path, "routes")
+			rel, _ := filepath.Rel("routes", path)
+			if rel == "." {
+				rel = "/"
+			} else {
+				rel = "/" + rel
+			}
 
 			var tmpl *template.Template
 			tmpl = template.New(filepath.Base(files[0])).Funcs(core.BarryTemplateFuncs("dev", "cache"))

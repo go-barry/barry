@@ -682,7 +682,7 @@ func TestRouter_TemplateParseError(t *testing.T) {
 	}
 
 	_ = os.MkdirAll("routes/test", 0755)
-	_ = os.WriteFile("routes/test/index.html", []byte(`{{ define "content" }}{{ .Oops }}`), 0644) // invalid
+	_ = os.WriteFile("routes/test/index.html", []byte(`{{ define "content" }}{{ .Oops }}`), 0644)
 	_ = os.WriteFile("layout.html", []byte(`{{ define "layout" }}<html>{{ template "content" . }}</html>{{ end }}`), 0644)
 	_ = os.MkdirAll("components", 0755)
 
