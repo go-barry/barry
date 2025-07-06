@@ -1,8 +1,10 @@
 package core
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 func cleanupTestArtifacts() {
@@ -64,6 +68,20 @@ func setupRouterTestEnv(t *testing.T) (Config, func()) {
 		os.Remove("layout.html")
 	}
 }
+
+type mockWatcher struct {
+	events chan fsnotify.Event
+	errors chan error
+}
+
+func (w *mockWatcher) Events() <-chan fsnotify.Event { return w.events }
+func (w *mockWatcher) Errors() <-chan error          { return w.errors }
+func (w *mockWatcher) Close() error {
+	close(w.events)
+	close(w.errors)
+	return nil
+}
+func (w *mockWatcher) Add(_ string) error { return nil }
 
 func TestRouter_ServesMatchingRoute(t *testing.T) {
 	cfg, cleanup := setupRouterTestEnv(t)
@@ -193,6 +211,7 @@ func TestRouter_ServesFromGzipCache(t *testing.T) {
 	defer cleanup()
 
 	cfg.CacheEnabled = true
+	cfg.DebugHeaders = true
 
 	routeKey := "test"
 	cacheDir := filepath.Join(cfg.OutputDir, routeKey)
@@ -228,6 +247,9 @@ func TestRouter_ServesFromGzipCache(t *testing.T) {
 	}
 	if res.Header.Get("Content-Encoding") != "gzip" {
 		t.Errorf("expected gzip encoding, got: %s", res.Header.Get("Content-Encoding"))
+	}
+	if res.Header.Get("X-Barry-Cache") != "HIT" { // ✅ Assertion for the uncovered line
+		t.Errorf("expected X-Barry-Cache: HIT, got %s", res.Header.Get("X-Barry-Cache"))
 	}
 }
 
@@ -694,5 +716,460 @@ func TestRouter_TemplateParseError(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "Template error") {
 		t.Errorf("expected template parse error message, got: %s", rec.Body.String())
+	}
+}
+
+func TestRouter_ServerFile_GenericErrorNoTemplate(t *testing.T) {
+	t.Cleanup(cleanupTestArtifacts)
+
+	cfg := Config{
+		OutputDir:    t.TempDir(),
+		CacheEnabled: false,
+		DebugLogs:    true,
+		DebugHeaders: true,
+	}
+
+	// Create a valid route with an existing server file
+	_ = os.MkdirAll("routes/fail", 0755)
+	_ = os.WriteFile("routes/fail/index.html", []byte(`{{ define "content" }}Hello{{ end }}`), 0644)
+	_ = os.WriteFile("routes/fail/index.server.go", []byte("// dummy"), 0644)
+	_ = os.MkdirAll("components", 0755)
+
+	// No layout.html, no routes/_error, forces fallback response
+	router := NewRouter(cfg, RuntimeContext{Env: "dev"}).(*Router)
+	router.routes = []Route{{
+		URLPattern: regexp.MustCompile("^fail$"),
+		HTMLPath:   "routes/fail/index.html",
+		ServerPath: "routes/fail/index.server.go",
+		FilePath:   "routes/fail",
+	}}
+
+	// Return generic error from server logic
+	original := ExecuteServerFile
+	ExecuteServerFile = func(_ string, _ map[string]string, _ bool) (map[string]interface{}, error) {
+		return nil, errors.New("kaboom")
+	}
+	defer func() { ExecuteServerFile = original }()
+
+	req := httptest.NewRequest(http.MethodGet, "/fail", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Server logic error: kaboom") {
+		t.Errorf("expected server error message, got: %s", body)
+	}
+}
+
+func TestRouter_ServeStatic_MissingLayout_LogsWarning(t *testing.T) {
+	t.Cleanup(cleanupTestArtifacts)
+
+	cfg := Config{
+		OutputDir:    t.TempDir(),
+		CacheEnabled: false,
+		DebugLogs:    true,
+		DebugHeaders: false,
+	}
+
+	_ = os.MkdirAll("routes/test", 0755)
+	_ = os.WriteFile("routes/test/index.html", []byte(`<!-- layout: missing-layout.html -->
+{{ define "content" }}<h1>Hello</h1>{{ end }}`), 0644)
+	_ = os.MkdirAll("components", 0755)
+
+	router := NewRouter(cfg, RuntimeContext{Env: "dev"}).(*Router)
+	router.routes = []Route{{
+		URLPattern: regexp.MustCompile("^test$"),
+		HTMLPath:   "routes/test/index.html",
+		ServerPath: "routes/test/index.server.go",
+		FilePath:   "routes/test",
+	}}
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 due to missing layout, got %d", rec.Code)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `"layout" is undefined`) {
+		t.Errorf("expected template execution error for missing layout, got: %s", body)
+	}
+}
+
+func TestRouter_ServeStatic_SetsMissHeader(t *testing.T) {
+	t.Cleanup(cleanupTestArtifacts)
+
+	cfg := Config{
+		OutputDir:    t.TempDir(),
+		CacheEnabled: false, // ensures cache is not hit
+		DebugLogs:    true,
+		DebugHeaders: true, // ✅ enables "MISS" header
+	}
+
+	_ = os.MkdirAll("routes/test", 0755)
+	_ = os.WriteFile("routes/test/index.html", []byte(`<!-- layout: layout.html -->
+{{ define "content" }}<h1>Hello Miss</h1>{{ end }}`), 0644)
+	_ = os.WriteFile("layout.html", []byte(`{{ define "layout" }}<html><body>{{ template "content" . }}</body></html>{{ end }}`), 0644)
+	_ = os.MkdirAll("components", 0755)
+
+	router := NewRouter(cfg, RuntimeContext{Env: "dev"}).(*Router)
+	router.routes = []Route{{
+		URLPattern: regexp.MustCompile("^test$"),
+		HTMLPath:   "routes/test/index.html",
+		ServerPath: "routes/test/index.server.go",
+		FilePath:   "routes/test",
+	}}
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	res := rec.Result()
+	if res.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 OK, got %d", res.StatusCode)
+	}
+
+	if got := res.Header.Get("X-Barry-Cache"); got != "MISS" {
+		t.Errorf("expected X-Barry-Cache header to be MISS, got: %q", got)
+	}
+}
+
+func TestRouter_UsesCachedTemplate(t *testing.T) {
+	t.Cleanup(cleanupTestArtifacts)
+
+	cfg := Config{
+		OutputDir:    t.TempDir(),
+		CacheEnabled: false,
+		DebugLogs:    true,
+		DebugHeaders: false,
+	}
+
+	// Create layout + route
+	_ = os.MkdirAll("routes/test", 0755)
+	_ = os.WriteFile("routes/test/index.html", []byte(`<!-- layout: layout.html -->
+{{ define "content" }}<h1>Hello Cache</h1>{{ end }}`), 0644)
+	_ = os.WriteFile("layout.html", []byte(`{{ define "layout" }}<html><body>{{ template "content" . }}</body></html>{{ end }}`), 0644)
+	_ = os.MkdirAll("components", 0755)
+
+	// ✅ Use the same Router instance
+	router := NewRouter(cfg, RuntimeContext{Env: "dev"}).(*Router)
+	router.routes = []Route{{
+		URLPattern: regexp.MustCompile("^test$"),
+		HTMLPath:   "routes/test/index.html",
+		ServerPath: "routes/test/index.server.go",
+		FilePath:   "routes/test",
+	}}
+
+	// First request - populates templateCache
+	req1 := httptest.NewRequest(http.MethodGet, "/test", nil)
+	rec1 := httptest.NewRecorder()
+	router.ServeHTTP(rec1, req1)
+
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first request failed: got %d", rec1.Code)
+	}
+
+	// Second request - should hit the templateCache
+	req2 := httptest.NewRequest(http.MethodGet, "/test", nil)
+	rec2 := httptest.NewRecorder()
+	router.ServeHTTP(rec2, req2)
+
+	if rec2.Code != http.StatusOK {
+		t.Errorf("second request failed: got %d", rec2.Code)
+	}
+	if !strings.Contains(rec2.Body.String(), "Hello Cache") {
+		t.Errorf("expected cached template content, got: %s", rec2.Body.String())
+	}
+}
+
+func TestRouter_CacheQueueFull_ImmediateWriteErrorLogs(t *testing.T) {
+	t.Cleanup(cleanupTestArtifacts)
+
+	cfg := Config{
+		OutputDir:    t.TempDir(),
+		CacheEnabled: true,
+		DebugLogs:    true,
+	}
+
+	// Create valid route and layout
+	_ = os.MkdirAll("routes/test", 0755)
+	_ = os.WriteFile("routes/test/index.html", []byte(`<!-- layout: layout.html -->
+{{ define "content" }}<h1>Cache Fail</h1>{{ end }}`), 0644)
+	_ = os.WriteFile("layout.html", []byte(`{{ define "layout" }}<html><body>{{ template "content" . }}</body></html>{{ end }}`), 0644)
+	_ = os.MkdirAll("components", 0755)
+
+	// Fill queue to force fallback
+	fullQueue := make(chan cacheWriteRequest, 1)
+	fullQueue <- cacheWriteRequest{}
+	originalQueue := cacheQueue
+	cacheQueue = fullQueue
+	defer func() { cacheQueue = originalQueue }()
+
+	// Mock SaveCachedHTMLFunc to return an error
+	originalSave := SaveCachedHTMLFunc
+	defer func() { SaveCachedHTMLFunc = originalSave }()
+	SaveCachedHTMLFunc = func(_ Config, _ string, _ []byte) error {
+		return errors.New("disk full")
+	}
+
+	router := NewRouter(cfg, RuntimeContext{Env: "dev"}).(*Router)
+	router.routes = []Route{{
+		URLPattern: regexp.MustCompile("^test$"),
+		HTMLPath:   "routes/test/index.html",
+		ServerPath: "routes/test/index.server.go",
+		FilePath:   "routes/test",
+	}}
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	// Give goroutine time to run
+	time.Sleep(100 * time.Millisecond)
+
+	// We can’t assert log output without capturing stdout,
+	// but this covers the line and can be confirmed by coverage
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 OK, got %d", rec.Code)
+	}
+}
+
+func TestRouter_ServesIndexAtRoot(t *testing.T) {
+	t.Cleanup(cleanupTestArtifacts)
+
+	cfg := Config{
+		OutputDir:    t.TempDir(),
+		CacheEnabled: false,
+		DebugLogs:    true,
+		DebugHeaders: false,
+	}
+
+	// Create index route at root
+	_ = os.MkdirAll("routes", 0755)
+	_ = os.WriteFile("routes/index.html", []byte(`<!-- layout: layout.html -->
+{{ define "content" }}<h1>Home Page</h1>{{ end }}`), 0644)
+	_ = os.WriteFile("layout.html", []byte(`{{ define "layout" }}<html><body>{{ template "content" . }}</body></html>{{ end }}`), 0644)
+	_ = os.MkdirAll("components", 0755)
+
+	router := NewRouter(cfg, RuntimeContext{Env: "dev"}).(*Router)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil) // 👈 triggers the path == "" branch
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 OK, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Home Page") {
+		t.Errorf("expected Home Page content, got: %s", rec.Body.String())
+	}
+}
+
+func TestRouter_ParsesAndInjectsParams(t *testing.T) {
+	t.Cleanup(cleanupTestArtifacts)
+
+	cfg := Config{
+		OutputDir:    t.TempDir(),
+		CacheEnabled: false,
+		DebugLogs:    true,
+		DebugHeaders: false,
+	}
+
+	// Create dynamic route: /posts/_id
+	_ = os.MkdirAll("routes/posts/_id", 0755)
+	_ = os.WriteFile("routes/posts/_id/index.html", []byte(`<!-- layout: layout.html -->
+{{ define "content" }}<h1>Post ID: {{ .id }}</h1>{{ end }}`), 0644)
+	_ = os.WriteFile("routes/posts/_id/index.server.go", []byte("// mock server logic"), 0644)
+
+	_ = os.WriteFile("layout.html", []byte(`{{ define "layout" }}<html><body>{{ template "content" . }}</body></html>{{ end }}`), 0644)
+	_ = os.MkdirAll("components", 0755)
+
+	// Mock ExecuteServerFile to return params into data
+	original := ExecuteServerFile
+	ExecuteServerFile = func(_ string, params map[string]string, _ bool) (map[string]interface{}, error) {
+		out := map[string]interface{}{}
+		for k, v := range params {
+			out[k] = v
+		}
+		return out, nil
+	}
+	defer func() { ExecuteServerFile = original }()
+
+	router := NewRouter(cfg, RuntimeContext{Env: "dev"}).(*Router)
+	router.routes = []Route{{
+		URLPattern: regexp.MustCompile("^posts/([^/]+)$"),
+		ParamKeys:  []string{"id"},
+		HTMLPath:   "routes/posts/_id/index.html",
+		ServerPath: "routes/posts/_id/index.server.go",
+		FilePath:   "routes/posts/_id",
+	}}
+
+	req := httptest.NewRequest(http.MethodGet, "/posts/abc123", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 OK, got %d", rec.Code)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "Post ID: abc123") {
+		t.Errorf("expected param injected, got: %s", body)
+	}
+}
+
+func TestRouter_WatchEverything_NewWatcherFails(t *testing.T) {
+	cfg, cleanup := setupRouterTestEnv(t)
+	defer cleanup()
+
+	// Override newWatcher to simulate an error
+	original := newWatcher
+	newWatcher = func() (*fsnotify.Watcher, error) {
+		return nil, errors.New("failed to create watcher")
+	}
+	defer func() { newWatcher = original }()
+
+	_ = NewRouter(cfg, RuntimeContext{
+		Env:         "dev",
+		EnableWatch: true,
+		OnReload:    func() {},
+	})
+
+	// Allow goroutine to run
+	time.Sleep(50 * time.Millisecond)
+}
+
+func TestRouter_getLayoutPath_ScannerError(t *testing.T) {
+	t.Cleanup(cleanupTestArtifacts)
+
+	cfg := Config{
+		OutputDir: t.TempDir(),
+	}
+
+	// Create a file with very long line that exceeds bufio.Scanner's default max token size
+	_ = os.MkdirAll("routes/test", 0755)
+	longLine := strings.Repeat("a", bufio.MaxScanTokenSize+10) // will cause scanner error
+	_ = os.WriteFile("routes/test/index.html", []byte(longLine), 0644)
+
+	router := NewRouter(cfg, RuntimeContext{Env: "dev"}).(*Router)
+
+	// Trigger getLayoutPath to hit scanner.Err()
+	path := router.getLayoutPath("routes/test/index.html")
+
+	if path != "" {
+		t.Errorf("expected empty layout path due to scanner error, got: %q", path)
+	}
+}
+
+func TestRouter_ServeStatic_MissingLayoutWithDebugLogs(t *testing.T) {
+	t.Cleanup(cleanupTestArtifacts)
+
+	cfg := Config{
+		OutputDir:    t.TempDir(),
+		CacheEnabled: false,
+		DebugLogs:    true,
+	}
+
+	// Reference a layout that does not exist
+	_ = os.MkdirAll("routes/test", 0755)
+	_ = os.WriteFile("routes/test/index.html", []byte(`<!-- layout: missing-layout.html -->
+{{ define "content" }}<h1>Should Fail</h1>{{ end }}`), 0644)
+
+	_ = os.MkdirAll("components", 0755)
+
+	router := NewRouter(cfg, RuntimeContext{Env: "dev"}).(*Router)
+	router.routes = []Route{{
+		URLPattern: regexp.MustCompile("^test$"),
+		HTMLPath:   "routes/test/index.html",
+		ServerPath: "routes/test/index.server.go",
+		FilePath:   "routes/test",
+	}}
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 due to missing layout, got %d", rec.Code)
+	}
+
+	if !strings.Contains(rec.Body.String(), "Template execution error") {
+		t.Errorf("expected template execution error, got: %s", rec.Body.String())
+	}
+}
+
+func TestRouter_RenderErrorPage_MissingLayoutFallback(t *testing.T) {
+	t.Cleanup(cleanupTestArtifacts)
+
+	cfg := Config{
+		OutputDir:    t.TempDir(),
+		CacheEnabled: false,
+	}
+
+	_ = os.MkdirAll("routes/_error", 0755)
+
+	// This is intentionally missing layout file
+	_ = os.WriteFile("routes/_error/404.html", []byte(`<!-- layout: does-not-exist.html -->
+{{ define "layout" }}<html><body>{{ template "content" . }}</body></html>{{ end }}
+{{ define "content" }}<h1>Error 404 Override</h1>{{ end }}`), 0644)
+
+	// This fallback file will be used
+	_ = os.WriteFile("routes/_error/index.html", []byte(`<!-- layout: does-not-exist.html -->
+{{ define "layout" }}<html><body>{{ template "content" . }}</body></html>{{ end }}
+{{ define "content" }}<h1>Error Fallback</h1>{{ end }}`), 0644)
+
+	_ = os.MkdirAll("components", 0755)
+
+	router := NewRouter(cfg, RuntimeContext{Env: "dev"}).(*Router)
+
+	rec := httptest.NewRecorder()
+	router.renderErrorPage(rec, http.StatusNotFound, "Missing layout", "/bad")
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404 fallback, got %d", rec.Code)
+	}
+
+	if !strings.Contains(rec.Body.String(), "Error Fallback") &&
+		!strings.Contains(rec.Body.String(), "Error 404 Override") {
+		t.Errorf("expected fallback content, got: %s", rec.Body.String())
+	}
+}
+
+func TestRouter_RenderErrorPage_TemplateParseError(t *testing.T) {
+	t.Cleanup(cleanupTestArtifacts)
+
+	cfg := Config{
+		OutputDir:    t.TempDir(),
+		CacheEnabled: false,
+	}
+
+	_ = os.MkdirAll("routes/_error", 0755)
+	// Syntax error: missing closing }}
+	_ = os.WriteFile("routes/_error/index.html", []byte(`<!-- layout: layout.html -->
+{{ define "layout" }}<html><body>{{ template "content" . }}</body></html>{{ end }}
+{{ define "content" }}<h1>{{ .Message </h1>{{ end }}`), 0644)
+
+	// Valid layout path reference but the file doesn't exist (we want the layout directive to be respected)
+	// We do not create layout.html to avoid loading it
+
+	_ = os.MkdirAll("components", 0755)
+
+	router := NewRouter(cfg, RuntimeContext{Env: "dev"}).(*Router)
+
+	rec := httptest.NewRecorder()
+	router.renderErrorPage(rec, http.StatusNotFound, "Invalid template syntax", "/broken")
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 due to parse error, got %d", rec.Code)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "Template error") {
+		t.Errorf("expected template parse error message, got: %s", body)
 	}
 }

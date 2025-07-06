@@ -69,6 +69,7 @@ var cacheLocks sync.Map
 var compileLocks sync.Map
 var cacheQueue = make(chan cacheWriteRequest, 100)
 var SaveCachedHTMLFunc = SaveCachedHTML
+var newWatcher = fsnotify.NewWatcher
 
 func init() {
 	go func() {
@@ -371,7 +372,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Router) watchEverything() {
-	watcher, err := fsnotify.NewWatcher()
+	watcher, err := newWatcher()
 	if err != nil {
 		return
 	}
