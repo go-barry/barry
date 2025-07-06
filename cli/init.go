@@ -12,7 +12,9 @@ import (
 )
 
 //go:embed _starter/** _starter/**/*
-var starterFS embed.FS
+var embeddedStarter embed.FS
+
+var starterFS fs.FS = embeddedStarter
 
 var InitCommand = &cli.Command{
 	Name:  "init",

@@ -8,8 +8,8 @@ import (
 	clilib "github.com/urfave/cli/v2"
 )
 
-func main() {
-	app := &clilib.App{
+func newApp() *clilib.App {
+	return &clilib.App{
 		Name:  "barry",
 		Usage: "A dynamic HTML framework powered by Go",
 		Commands: []*clilib.Command{
@@ -21,8 +21,14 @@ func main() {
 			barrycli.InfoCommand,
 		},
 	}
+}
 
-	if err := app.Run(os.Args); err != nil {
+func runApp(args []string) error {
+	return newApp().Run(args)
+}
+
+func main() {
+	if err := runApp(os.Args); err != nil {
 		log.Fatal(err)
 	}
 }
