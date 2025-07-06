@@ -116,6 +116,10 @@ func (r *Router) loadRoutes() {
 			return nil
 		}
 
+		if strings.HasPrefix(filepath.Base(path), "_error") {
+			return filepath.SkipDir
+		}
+
 		htmlPath := filepath.Join(path, "index.html")
 		if _, err := os.Stat(htmlPath); err != nil {
 			return nil
@@ -342,7 +346,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			}
 		}
 		if !found {
-			r.renderErrorPage(w, http.StatusNotFound, "Page not found", req.URL.Path)
+			r.renderErrorPage(recorder, http.StatusNotFound, "Page not found", req.URL.Path)
 		}
 	}
 

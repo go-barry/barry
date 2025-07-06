@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
 
+	"github.com/go-barry/barry/core"
 	"github.com/urfave/cli/v2"
 )
 
@@ -51,12 +53,23 @@ var CheckCommand = &cli.Command{
 				files = append([]string{layoutPath}, files...)
 			}
 
-			_, err = template.ParseFiles(files...)
 			rel := strings.TrimPrefix(path, "routes")
+
+			var tmpl *template.Template
+			tmpl = template.New(filepath.Base(files[0])).Funcs(core.BarryTemplateFuncs("dev", "cache"))
+			tmpl, err = tmpl.ParseFiles(files...)
 
 			if err != nil {
 				failed = true
-				fmt.Printf("❌ %s → %v\n", rel, err)
+				fmt.Printf("❌ %s → parse error: %v\n", rel, err)
+				return nil
+			}
+
+			var buf bytes.Buffer
+			err = tmpl.ExecuteTemplate(&buf, "layout", map[string]interface{}{})
+			if err != nil {
+				failed = true
+				fmt.Printf("❌ %s → exec error: %v\n", rel, err)
 			} else {
 				fmt.Printf("✅ %s\n", rel)
 			}
@@ -65,7 +78,7 @@ var CheckCommand = &cli.Command{
 		})
 
 		if failed {
-			return fmt.Errorf("some templates failed to compile")
+			return cli.Exit("some templates failed to compile", 1)
 		}
 
 		fmt.Println("✅ All templates validated successfully.")
