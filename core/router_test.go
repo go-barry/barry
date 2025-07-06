@@ -248,7 +248,7 @@ func TestRouter_ServesFromGzipCache(t *testing.T) {
 	if res.Header.Get("Content-Encoding") != "gzip" {
 		t.Errorf("expected gzip encoding, got: %s", res.Header.Get("Content-Encoding"))
 	}
-	if res.Header.Get("X-Barry-Cache") != "HIT" { // ✅ Assertion for the uncovered line
+	if res.Header.Get("X-Barry-Cache") != "HIT" {
 		t.Errorf("expected X-Barry-Cache: HIT, got %s", res.Header.Get("X-Barry-Cache"))
 	}
 }
@@ -283,19 +283,16 @@ func TestRouter_ServerFileReturnsNotFoundError(t *testing.T) {
 		DebugHeaders: false,
 	}
 
-	// Create fail route and dummy server file
 	_ = os.MkdirAll("routes/fail", 0755)
 	_ = os.WriteFile("routes/fail/index.html", []byte(`{{ define "content" }}Should not render{{ end }}`), 0644)
 	_ = os.WriteFile("routes/fail/index.server.go", []byte(""), 0644)
 
-	// Error template (points to layout)
 	_ = os.MkdirAll("routes/_error", 0755)
 	_ = os.WriteFile("routes/_error/index.html", []byte(`
 <!-- layout: components/layouts/layout.html -->
 {{ define "content" }}<h1>Error Layout: {{ .StatusCode }}</h1>{{ end }}
 `), 0644)
 
-	// Shared layout file
 	_ = os.MkdirAll("components/layouts", 0755)
 	_ = os.WriteFile("components/layouts/layout.html", []byte(`
 {{ define "layout" }}
@@ -317,7 +314,6 @@ func TestRouter_ServerFileReturnsNotFoundError(t *testing.T) {
 		FilePath:   "routes/fail",
 	}}
 
-	// Trigger the not-found logic path
 	original := ExecuteServerFile
 	ExecuteServerFile = func(_ string, _ map[string]string, _ bool) (map[string]interface{}, error) {
 		return nil, ErrNotFound
@@ -346,19 +342,16 @@ func TestRouter_ServerFileReturnsGenericError(t *testing.T) {
 		DebugHeaders: false,
 	}
 
-	// Create fail route and dummy server file
 	_ = os.MkdirAll("routes/fail", 0755)
 	_ = os.WriteFile("routes/fail/index.html", []byte(`{{ define "content" }}Should not render{{ end }}`), 0644)
 	_ = os.WriteFile("routes/fail/index.server.go", []byte(""), 0644)
 
-	// Error template (points to layout)
 	_ = os.MkdirAll("routes/_error", 0755)
 	_ = os.WriteFile("routes/_error/index.html", []byte(`
 <!-- layout: components/layouts/layout.html -->
 {{ define "content" }}<h1>Error Layout: {{ .StatusCode }}</h1>{{ end }}
 `), 0644)
 
-	// Shared layout file
 	_ = os.MkdirAll("components/layouts", 0755)
 	_ = os.WriteFile("components/layouts/layout.html", []byte(`
 {{ define "layout" }}
@@ -380,7 +373,6 @@ func TestRouter_ServerFileReturnsGenericError(t *testing.T) {
 		FilePath:   "routes/fail",
 	}}
 
-	// Return ErrNotFound to simulate an error that triggers template
 	original := ExecuteServerFile
 	ExecuteServerFile = func(_ string, _ map[string]string, _ bool) (map[string]interface{}, error) {
 		return nil, ErrNotFound
@@ -638,7 +630,6 @@ func TestRouter_CacheQueueFull_ImmediateWriteWithLogs(t *testing.T) {
 		DebugLogs:    true,
 	}
 
-	// Create valid route and layout
 	_ = os.MkdirAll("routes/test", 0755)
 	_ = os.WriteFile("routes/test/index.html", []byte(`<!-- layout: layout.html -->
 {{ define "content" }}<h1>Hello Fallback</h1>{{ end }}`), 0644)
@@ -646,20 +637,17 @@ func TestRouter_CacheQueueFull_ImmediateWriteWithLogs(t *testing.T) {
 	_ = os.WriteFile("layout.html", []byte(`{{ define "layout" }}<html><body>{{ template "content" . }}</body></html>{{ end }}`), 0644)
 	_ = os.MkdirAll("components", 0755)
 
-	// Create a custom, unconsumed queue to guarantee fallback
 	fullQueue := make(chan cacheWriteRequest, 1)
-	fullQueue <- cacheWriteRequest{} // fill it
+	fullQueue <- cacheWriteRequest{}
 
-	// Override global queue temporarily
 	originalQueue := cacheQueue
 	cacheQueue = fullQueue
 	defer func() { cacheQueue = originalQueue }()
 
-	// Override SaveCachedHTML to avoid real disk writes
 	originalSave := SaveCachedHTMLFunc
 	defer func() { SaveCachedHTMLFunc = originalSave }()
 	SaveCachedHTMLFunc = func(_ Config, _ string, _ []byte) error {
-		return nil // simulate success
+		return nil
 	}
 
 	router := NewRouter(cfg, RuntimeContext{Env: "dev"}).(*Router)
@@ -683,7 +671,6 @@ func TestRouter_CacheQueueFull_ImmediateWriteWithLogs(t *testing.T) {
 		t.Errorf("expected rendered content, got: %s", body)
 	}
 
-	// Give time for immediate write fallback to execute
 	time.Sleep(200 * time.Millisecond)
 }
 
@@ -729,13 +716,11 @@ func TestRouter_ServerFile_GenericErrorNoTemplate(t *testing.T) {
 		DebugHeaders: true,
 	}
 
-	// Create a valid route with an existing server file
 	_ = os.MkdirAll("routes/fail", 0755)
 	_ = os.WriteFile("routes/fail/index.html", []byte(`{{ define "content" }}Hello{{ end }}`), 0644)
 	_ = os.WriteFile("routes/fail/index.server.go", []byte("// dummy"), 0644)
 	_ = os.MkdirAll("components", 0755)
 
-	// No layout.html, no routes/_error, forces fallback response
 	router := NewRouter(cfg, RuntimeContext{Env: "dev"}).(*Router)
 	router.routes = []Route{{
 		URLPattern: regexp.MustCompile("^fail$"),
@@ -744,7 +729,6 @@ func TestRouter_ServerFile_GenericErrorNoTemplate(t *testing.T) {
 		FilePath:   "routes/fail",
 	}}
 
-	// Return generic error from server logic
 	original := ExecuteServerFile
 	ExecuteServerFile = func(_ string, _ map[string]string, _ bool) (map[string]interface{}, error) {
 		return nil, errors.New("kaboom")
@@ -806,9 +790,9 @@ func TestRouter_ServeStatic_SetsMissHeader(t *testing.T) {
 
 	cfg := Config{
 		OutputDir:    t.TempDir(),
-		CacheEnabled: false, // ensures cache is not hit
+		CacheEnabled: false,
 		DebugLogs:    true,
-		DebugHeaders: true, // ✅ enables "MISS" header
+		DebugHeaders: true,
 	}
 
 	_ = os.MkdirAll("routes/test", 0755)
@@ -849,14 +833,12 @@ func TestRouter_UsesCachedTemplate(t *testing.T) {
 		DebugHeaders: false,
 	}
 
-	// Create layout + route
 	_ = os.MkdirAll("routes/test", 0755)
 	_ = os.WriteFile("routes/test/index.html", []byte(`<!-- layout: layout.html -->
 {{ define "content" }}<h1>Hello Cache</h1>{{ end }}`), 0644)
 	_ = os.WriteFile("layout.html", []byte(`{{ define "layout" }}<html><body>{{ template "content" . }}</body></html>{{ end }}`), 0644)
 	_ = os.MkdirAll("components", 0755)
 
-	// ✅ Use the same Router instance
 	router := NewRouter(cfg, RuntimeContext{Env: "dev"}).(*Router)
 	router.routes = []Route{{
 		URLPattern: regexp.MustCompile("^test$"),
@@ -865,7 +847,6 @@ func TestRouter_UsesCachedTemplate(t *testing.T) {
 		FilePath:   "routes/test",
 	}}
 
-	// First request - populates templateCache
 	req1 := httptest.NewRequest(http.MethodGet, "/test", nil)
 	rec1 := httptest.NewRecorder()
 	router.ServeHTTP(rec1, req1)
@@ -874,7 +855,6 @@ func TestRouter_UsesCachedTemplate(t *testing.T) {
 		t.Fatalf("first request failed: got %d", rec1.Code)
 	}
 
-	// Second request - should hit the templateCache
 	req2 := httptest.NewRequest(http.MethodGet, "/test", nil)
 	rec2 := httptest.NewRecorder()
 	router.ServeHTTP(rec2, req2)
@@ -896,21 +876,18 @@ func TestRouter_CacheQueueFull_ImmediateWriteErrorLogs(t *testing.T) {
 		DebugLogs:    true,
 	}
 
-	// Create valid route and layout
 	_ = os.MkdirAll("routes/test", 0755)
 	_ = os.WriteFile("routes/test/index.html", []byte(`<!-- layout: layout.html -->
 {{ define "content" }}<h1>Cache Fail</h1>{{ end }}`), 0644)
 	_ = os.WriteFile("layout.html", []byte(`{{ define "layout" }}<html><body>{{ template "content" . }}</body></html>{{ end }}`), 0644)
 	_ = os.MkdirAll("components", 0755)
 
-	// Fill queue to force fallback
 	fullQueue := make(chan cacheWriteRequest, 1)
 	fullQueue <- cacheWriteRequest{}
 	originalQueue := cacheQueue
 	cacheQueue = fullQueue
 	defer func() { cacheQueue = originalQueue }()
 
-	// Mock SaveCachedHTMLFunc to return an error
 	originalSave := SaveCachedHTMLFunc
 	defer func() { SaveCachedHTMLFunc = originalSave }()
 	SaveCachedHTMLFunc = func(_ Config, _ string, _ []byte) error {
@@ -929,11 +906,8 @@ func TestRouter_CacheQueueFull_ImmediateWriteErrorLogs(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	// Give goroutine time to run
 	time.Sleep(100 * time.Millisecond)
 
-	// We can’t assert log output without capturing stdout,
-	// but this covers the line and can be confirmed by coverage
 	if rec.Code != http.StatusOK {
 		t.Errorf("expected 200 OK, got %d", rec.Code)
 	}
@@ -949,7 +923,6 @@ func TestRouter_ServesIndexAtRoot(t *testing.T) {
 		DebugHeaders: false,
 	}
 
-	// Create index route at root
 	_ = os.MkdirAll("routes", 0755)
 	_ = os.WriteFile("routes/index.html", []byte(`<!-- layout: layout.html -->
 {{ define "content" }}<h1>Home Page</h1>{{ end }}`), 0644)
@@ -958,7 +931,7 @@ func TestRouter_ServesIndexAtRoot(t *testing.T) {
 
 	router := NewRouter(cfg, RuntimeContext{Env: "dev"}).(*Router)
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil) // 👈 triggers the path == "" branch
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -980,7 +953,6 @@ func TestRouter_ParsesAndInjectsParams(t *testing.T) {
 		DebugHeaders: false,
 	}
 
-	// Create dynamic route: /posts/_id
 	_ = os.MkdirAll("routes/posts/_id", 0755)
 	_ = os.WriteFile("routes/posts/_id/index.html", []byte(`<!-- layout: layout.html -->
 {{ define "content" }}<h1>Post ID: {{ .id }}</h1>{{ end }}`), 0644)
@@ -989,7 +961,6 @@ func TestRouter_ParsesAndInjectsParams(t *testing.T) {
 	_ = os.WriteFile("layout.html", []byte(`{{ define "layout" }}<html><body>{{ template "content" . }}</body></html>{{ end }}`), 0644)
 	_ = os.MkdirAll("components", 0755)
 
-	// Mock ExecuteServerFile to return params into data
 	original := ExecuteServerFile
 	ExecuteServerFile = func(_ string, params map[string]string, _ bool) (map[string]interface{}, error) {
 		out := map[string]interface{}{}
@@ -1027,7 +998,6 @@ func TestRouter_WatchEverything_NewWatcherFails(t *testing.T) {
 	cfg, cleanup := setupRouterTestEnv(t)
 	defer cleanup()
 
-	// Override newWatcher to simulate an error
 	original := newWatcher
 	newWatcher = func() (*fsnotify.Watcher, error) {
 		return nil, errors.New("failed to create watcher")
@@ -1040,7 +1010,6 @@ func TestRouter_WatchEverything_NewWatcherFails(t *testing.T) {
 		OnReload:    func() {},
 	})
 
-	// Allow goroutine to run
 	time.Sleep(50 * time.Millisecond)
 }
 
@@ -1051,14 +1020,12 @@ func TestRouter_getLayoutPath_ScannerError(t *testing.T) {
 		OutputDir: t.TempDir(),
 	}
 
-	// Create a file with very long line that exceeds bufio.Scanner's default max token size
 	_ = os.MkdirAll("routes/test", 0755)
-	longLine := strings.Repeat("a", bufio.MaxScanTokenSize+10) // will cause scanner error
+	longLine := strings.Repeat("a", bufio.MaxScanTokenSize+10)
 	_ = os.WriteFile("routes/test/index.html", []byte(longLine), 0644)
 
 	router := NewRouter(cfg, RuntimeContext{Env: "dev"}).(*Router)
 
-	// Trigger getLayoutPath to hit scanner.Err()
 	path := router.getLayoutPath("routes/test/index.html")
 
 	if path != "" {
@@ -1075,7 +1042,6 @@ func TestRouter_ServeStatic_MissingLayoutWithDebugLogs(t *testing.T) {
 		DebugLogs:    true,
 	}
 
-	// Reference a layout that does not exist
 	_ = os.MkdirAll("routes/test", 0755)
 	_ = os.WriteFile("routes/test/index.html", []byte(`<!-- layout: missing-layout.html -->
 {{ define "content" }}<h1>Should Fail</h1>{{ end }}`), 0644)
@@ -1113,12 +1079,10 @@ func TestRouter_RenderErrorPage_MissingLayoutFallback(t *testing.T) {
 
 	_ = os.MkdirAll("routes/_error", 0755)
 
-	// This is intentionally missing layout file
 	_ = os.WriteFile("routes/_error/404.html", []byte(`<!-- layout: does-not-exist.html -->
 {{ define "layout" }}<html><body>{{ template "content" . }}</body></html>{{ end }}
 {{ define "content" }}<h1>Error 404 Override</h1>{{ end }}`), 0644)
 
-	// This fallback file will be used
 	_ = os.WriteFile("routes/_error/index.html", []byte(`<!-- layout: does-not-exist.html -->
 {{ define "layout" }}<html><body>{{ template "content" . }}</body></html>{{ end }}
 {{ define "content" }}<h1>Error Fallback</h1>{{ end }}`), 0644)
@@ -1149,13 +1113,9 @@ func TestRouter_RenderErrorPage_TemplateParseError(t *testing.T) {
 	}
 
 	_ = os.MkdirAll("routes/_error", 0755)
-	// Syntax error: missing closing }}
 	_ = os.WriteFile("routes/_error/index.html", []byte(`<!-- layout: layout.html -->
 {{ define "layout" }}<html><body>{{ template "content" . }}</body></html>{{ end }}
 {{ define "content" }}<h1>{{ .Message </h1>{{ end }}`), 0644)
-
-	// Valid layout path reference but the file doesn't exist (we want the layout directive to be respected)
-	// We do not create layout.html to avoid loading it
 
 	_ = os.MkdirAll("components", 0755)
 
