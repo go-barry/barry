@@ -57,7 +57,7 @@ type ExecContext struct {
 	Params     map[string]string
 }
 
-func ExecuteServerFile(filePath string, params map[string]string, devMode bool) (map[string]interface{}, error) {
+var ExecuteServerFile = func(filePath string, params map[string]string, devMode bool) (map[string]interface{}, error) {
 	return ExecuteServerFileWithTime(filePath, params, devMode, time.Now)
 }
 
