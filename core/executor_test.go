@@ -158,13 +158,10 @@ func TestExecuteServerFile_WriteFileFails(t *testing.T) {
 	hash := sha256.Sum256([]byte(absPath + fixedTime.String()))
 	runDir := filepath.Join(tmp, ".barry-tmp", fmt.Sprintf("%x", hash[:8]))
 
-	// Create the dir so MkdirAll succeeds
 	_ = os.MkdirAll(runDir, 0755)
 
-	// Make it read-only so writing fails
 	_ = os.Chmod(runDir, 0500)
 
-	// Restore permissions for cleanup
 	t.Cleanup(func() {
 		_ = os.Chmod(runDir, 0755)
 	})

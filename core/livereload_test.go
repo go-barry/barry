@@ -105,3 +105,36 @@ func TestLiveReloader_BroadcastHandlesWriteFailure(t *testing.T) {
 
 	lr.BroadcastReload()
 }
+
+func TestLiveReloader_BroadcastRemovesDeadConnection(t *testing.T) {
+	lr := NewLiveReloader()
+
+	server := httptest.NewServer(http.HandlerFunc(lr.Handler))
+	defer server.Close()
+
+	url := "ws" + server.URL[len("http"):]
+	ws, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("failed to connect WebSocket: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	_ = ws.Close()
+
+	time.Sleep(100 * time.Millisecond)
+
+	lr.(*LiveReloader).lock.Lock()
+	lr.(*LiveReloader).clients[ws] = true
+	lr.(*LiveReloader).lock.Unlock()
+
+	lr.BroadcastReload()
+
+	lr.(*LiveReloader).lock.Lock()
+	_, exists := lr.(*LiveReloader).clients[ws]
+	lr.(*LiveReloader).lock.Unlock()
+
+	if exists {
+		t.Errorf("expected closed connection to be removed from clients map")
+	}
+}
