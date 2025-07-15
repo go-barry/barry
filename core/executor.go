@@ -17,6 +17,8 @@ import (
 	json "github.com/segmentio/encoding/json"
 )
 
+var nowFunc = time.Now
+
 var (
 	runnerTemplate = `package main
 
@@ -206,7 +208,7 @@ var ExecuteAPIFile = func(filePath string, req *http.Request, params map[string]
 	}
 
 	tmpRoot := filepath.Join(modRoot, barryTmpDir)
-	hash := sha256.Sum256([]byte(absPath + req.Method + time.Now().String()))
+	hash := sha256.Sum256([]byte(absPath + req.Method + nowFunc().String()))
 	runDir := filepath.Join(tmpRoot, fmt.Sprintf("%x", hash[:8]))
 
 	if err := os.MkdirAll(runDir, os.ModePerm); err != nil {
@@ -243,7 +245,7 @@ var ExecuteAPIFile = func(filePath string, req *http.Request, params map[string]
 	return outBuf.Bytes(), nil
 }
 
-func findGoModRoot(startPath string) (string, string, error) {
+var findGoModRoot = func(startPath string) (string, string, error) {
 	dir := filepath.Dir(startPath)
 	for {
 		modPath := filepath.Join(dir, "go.mod")
