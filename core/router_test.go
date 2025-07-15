@@ -1133,3 +1133,129 @@ func TestRouter_RenderErrorPage_TemplateParseError(t *testing.T) {
 		t.Errorf("expected template parse error message, got: %s", body)
 	}
 }
+
+func TestServeHTTP_API_MatchesAndInvokesHandler(t *testing.T) {
+	orig := ExecuteAPIFile
+	defer func() { ExecuteAPIFile = orig }()
+
+	ExecuteAPIFile = func(path string, req *http.Request, params map[string]string, devMode bool) ([]byte, error) {
+		return []byte(`{"ok":true}`), nil
+	}
+
+	r := &Router{
+		env: "dev",
+		apiRoutes: []ApiRoute{
+			{
+				URLPattern: regexp.MustCompile("^hello/([^/]+)$"),
+				ParamKeys:  []string{"id"},
+				ServerPath: "api/hello/_id/index.go",
+				FilePath:   "api/hello/_id",
+			},
+		},
+	}
+
+	req := httptest.NewRequest("GET", "/api/hello/123", nil)
+	rec := httptest.NewRecorder()
+
+	r.ServeHTTP(rec, req)
+
+	res := rec.Result()
+	body, _ := io.ReadAll(res.Body)
+
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", res.StatusCode)
+	}
+	if !strings.Contains(string(body), `"ok":true`) {
+		t.Errorf("expected JSON output, got: %s", body)
+	}
+}
+
+func TestServeHTTP_API_MatchesWithMultipleParams(t *testing.T) {
+	orig := ExecuteAPIFile
+	defer func() { ExecuteAPIFile = orig }()
+
+	captured := map[string]string{}
+
+	ExecuteAPIFile = func(path string, req *http.Request, params map[string]string, devMode bool) ([]byte, error) {
+		captured = params
+		return []byte(`{"ok":true}`), nil
+	}
+
+	r := &Router{
+		env: "dev",
+		apiRoutes: []ApiRoute{
+			{
+				URLPattern: regexp.MustCompile("^user/([^/]+)/profile/([^/]+)$"),
+				ParamKeys:  []string{"userId", "section"},
+				ServerPath: "api/user/_userId/profile/_section/index.go",
+			},
+		},
+	}
+
+	req := httptest.NewRequest("GET", "/api/user/abc/profile/details", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if captured["userId"] != "abc" || captured["section"] != "details" {
+		t.Errorf("expected params to be parsed correctly, got: %+v", captured)
+	}
+}
+
+func TestServeHTTP_API_NoMatch_Returns404(t *testing.T) {
+	r := &Router{
+		env:       "dev",
+		apiRoutes: []ApiRoute{},
+	}
+
+	req := httptest.NewRequest("GET", "/api/does-not-exist", nil)
+	rec := httptest.NewRecorder()
+
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for unmatched api route, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "API route not found") {
+		t.Errorf("expected 404 body, got: %s", rec.Body.String())
+	}
+}
+
+func TestServeHTTP_API_MatchWithoutParams(t *testing.T) {
+	orig := ExecuteAPIFile
+	defer func() { ExecuteAPIFile = orig }()
+
+	var called bool
+
+	ExecuteAPIFile = func(path string, req *http.Request, params map[string]string, devMode bool) ([]byte, error) {
+		called = true
+		return []byte(`{"status":"ok"}`), nil
+	}
+
+	r := &Router{
+		env: "dev",
+		apiRoutes: []ApiRoute{
+			{
+				URLPattern: regexp.MustCompile("^ping$"),
+				ParamKeys:  []string{},
+				ServerPath: "api/ping/index.go",
+			},
+		},
+	}
+
+	req := httptest.NewRequest("GET", "/api/ping", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if !called {
+		t.Fatal("expected ExecuteAPIFile to be called")
+	}
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 OK, got %d", rec.Code)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "status") {
+		t.Errorf("expected JSON response, got: %s", body)
+	}
+}
