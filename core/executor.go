@@ -167,7 +167,7 @@ func ExecuteServerFileWithTime(filePath string, params map[string]string, devMod
 	return result, nil
 }
 
-func ExecuteAPIFile(filePath string, req *http.Request, params map[string]string, devMode bool) ([]byte, error) {
+var ExecuteAPIFile = func(filePath string, req *http.Request, params map[string]string, devMode bool) ([]byte, error) {
 	absPath, _ := filepath.Abs(filePath)
 
 	modRoot, moduleName, err := findGoModRoot(absPath)
