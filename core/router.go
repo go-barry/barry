@@ -30,6 +30,7 @@ type Router struct {
 	env            string
 	onReload       func()
 	routes         []Route
+	apiRoutes      []ApiRoute
 	componentFiles []string
 	templateCache  sync.Map
 	layoutCache    sync.Map
@@ -92,7 +93,7 @@ var NewRouter = func(config Config, ctx RuntimeContext) http.Handler {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 	go func() {
 		defer wg.Done()
 		r.loadRoutes()
@@ -100,6 +101,10 @@ var NewRouter = func(config Config, ctx RuntimeContext) http.Handler {
 	go func() {
 		defer wg.Done()
 		r.loadComponentFiles()
+	}()
+	go func() {
+		defer wg.Done()
+		r.loadApiRoutes()
 	}()
 	wg.Wait()
 
@@ -344,6 +349,22 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	start := time.Now()
 	path := strings.Trim(req.URL.Path, "/")
 	recorder := &statusRecorder{ResponseWriter: w, status: 200}
+
+	if strings.HasPrefix(path, "api/") {
+		apiPath := strings.TrimPrefix(path, "api/")
+		for _, route := range r.apiRoutes {
+			if matches := route.URLPattern.FindStringSubmatch(apiPath); matches != nil {
+				params := map[string]string{}
+				for i, key := range route.ParamKeys {
+					params[key] = matches[i+1]
+				}
+				r.handleAPI(recorder, req, route, params)
+				return
+			}
+		}
+		http.Error(w, "API route not found", http.StatusNotFound)
+		return
+	}
 
 	if path == "" {
 		r.serveStatic("routes/index.html", "routes/index.server.go", recorder, req, map[string]string{}, "")
