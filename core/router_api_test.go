@@ -11,19 +11,6 @@ import (
 	"testing"
 )
 
-func mockRouter(t *testing.T, apiDir string) *Router {
-	t.Helper()
-
-	cfg := Config{}
-	ctx := RuntimeContext{Env: "dev"}
-	r := &Router{
-		config: cfg,
-		env:    ctx.Env,
-	}
-	r.loadApiRoutes()
-	return r
-}
-
 func TestLoadApiRoutes_BasicRoute(t *testing.T) {
 	tmp := t.TempDir()
 
