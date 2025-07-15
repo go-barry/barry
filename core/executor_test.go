@@ -541,3 +541,86 @@ func TestExecuteAPIFile_DevModeTrueTriggersMultiWriter(t *testing.T) {
 		t.Fatalf("unexpected error in devMode: %v", err)
 	}
 }
+
+func TestExecuteAPIFile_FormatFailsButCompiles(t *testing.T) {
+	tmp := t.TempDir()
+	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/apiunformatted\n"), 0644)
+
+	apiPath := filepath.Join(tmp, "api", "ugly")
+	_ = os.MkdirAll(apiPath, 0755)
+
+	apiFile := filepath.Join(apiPath, "index.go")
+	_ = os.WriteFile(apiFile, []byte(`package ugly; import "net/http"; func HandleAPI(r *http.Request, p map[string]string)(interface{}, error){ return map[string]interface{}{"ugly":true}, nil }`), 0644)
+
+	origTemplate := apiRunnerTemplate
+	defer func() { apiRunnerTemplate = origTemplate }()
+	apiRunnerTemplate = `package main
+
+import (
+	"encoding/json"
+	"log"
+	"net/http"
+	"os"
+	target "{{ .ImportPath }}"
+)
+
+func main() {
+	log.SetOutput(os.Stderr)
+	r, _ := http.NewRequest("{{ .Method }}", "/?{{ .QueryString }}", nil)
+	params := map[string]string{}
+	result, err := target.HandleAPI(r, params)
+	if err != nil {
+		log.Println("barry-error:", err)
+		os.Exit(1)
+	}
+	json.NewEncoder(os.Stdout).Encode(result)
+}`
+
+	origFormat := formatSource
+	formatSource = func(_ []byte) ([]byte, error) {
+		return nil, fmt.Errorf("format failed!")
+	}
+	defer func() { formatSource = origFormat }()
+
+	req, _ := http.NewRequest("GET", "/?x=1", nil)
+	result, err := ExecuteAPIFile(apiFile, req, nil, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(string(result), `"ugly":true`) {
+		t.Errorf("expected result to contain 'ugly': %s", result)
+	}
+}
+
+func TestExecuteAPIFile_WriteFileFails(t *testing.T) {
+	tmp := t.TempDir()
+	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/writefailapi\n"), 0644)
+
+	apiPath := filepath.Join(tmp, "api", "failwrite")
+	_ = os.MkdirAll(apiPath, 0755)
+
+	apiFile := filepath.Join(apiPath, "index.go")
+	_ = os.WriteFile(apiFile, []byte(`package failwrite; import "net/http"; func HandleAPI(r *http.Request, _ map[string]string)(interface{}, error){ return nil, nil }`), 0644)
+
+	req, _ := http.NewRequest("GET", "/", nil)
+
+	fixedTime := time.Date(2025, 7, 15, 12, 0, 0, 0, time.UTC)
+	origNow := nowFunc
+	nowFunc = func() time.Time { return fixedTime }
+	defer func() { nowFunc = origNow }()
+
+	absPath, _ := filepath.Abs(apiFile)
+	hash := sha256.Sum256([]byte(absPath + req.Method + fixedTime.String()))
+	runDir := filepath.Join(tmp, ".barry-tmp", fmt.Sprintf("%x", hash[:8]))
+	tmpFile := filepath.Join(runDir, "main.go")
+
+	_ = os.MkdirAll(runDir, 0755)
+	_ = os.WriteFile(tmpFile, []byte("cannot overwrite"), 0444) // make unwritable
+
+	t.Cleanup(func() { _ = os.Chmod(runDir, 0755) })
+
+	_, err := ExecuteAPIFile(apiFile, req, nil, false)
+	if err == nil || !strings.Contains(err.Error(), "could not write temp file") {
+		t.Fatalf("expected write file error, got: %v", err)
+	}
+}

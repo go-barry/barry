@@ -18,6 +18,7 @@ import (
 )
 
 var nowFunc = time.Now
+var formatSource = format.Source
 
 var (
 	runnerTemplate = `package main
@@ -120,7 +121,7 @@ func ExecuteServerFileWithTime(filePath string, params map[string]string, devMod
 		return nil, fmt.Errorf("template execution error: %w", err)
 	}
 
-	formatted, err := format.Source(buf.Bytes())
+	formatted, err := formatSource(buf.Bytes())
 	if err != nil {
 		formatted = buf.Bytes()
 	}
@@ -202,7 +203,7 @@ var ExecuteAPIFile = func(filePath string, req *http.Request, params map[string]
 		return nil, fmt.Errorf("template execution error: %w", err)
 	}
 
-	formatted, err := format.Source(buf.Bytes())
+	formatted, err := formatSource(buf.Bytes())
 	if err != nil {
 		formatted = buf.Bytes()
 	}
