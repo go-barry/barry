@@ -298,7 +298,8 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		html = bytes.Replace(html, []byte("</body>"), []byte(`
 <script>
 	if (typeof WebSocket !== "undefined") {
-		const ws = new WebSocket("ws://" + location.host + "/__barry_reload");
+		const protocol = location.protocol === "https:" ? "wss" : "ws";
+		const ws = new WebSocket(protocol + "://" + location.host + "/__barry_reload");
 		ws.onmessage = e => {
 			if (e.data === "reload") location.reload();
 		};
@@ -312,6 +313,12 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		w.Header().Set("X-Barry-Cache", "MISS")
 	}
 	w.Write(html)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	if r.env == "dev" {
+		fmt.Printf("[Barry] Response flushed at %v\n", time.Now().Format(time.RFC3339Nano))
+	}
 
 	if r.config.CacheEnabled {
 		lock := getOrCreateLock(routeKey)
