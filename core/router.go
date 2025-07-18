@@ -59,6 +59,12 @@ func (r *statusRecorder) Status() int {
 	return r.status
 }
 
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 type cacheWriteRequest struct {
 	Config   Config
 	RouteKey string
