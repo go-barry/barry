@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -197,7 +198,7 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 			if data, err := os.ReadFile(gzFile); err == nil {
 				etag := generateETag(data)
 				if match := req.Header.Get("If-None-Match"); match == etag {
-					if r.env == "prod" || r.config.DebugLogs {
+					if r.config.DebugLogs {
 						fmt.Printf("🧩 304 Not Modified (gzip): /%s\n", routeKey)
 					}
 					w.WriteHeader(http.StatusNotModified)
@@ -207,10 +208,11 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 				w.Header().Set("Content-Encoding", "gzip")
 				w.Header().Set("Vary", "Accept-Encoding")
 				w.Header().Set("Content-Type", "text/html")
+				w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 				if r.config.DebugHeaders {
 					w.Header().Set("X-Barry-Cache", "HIT")
 				}
-				if r.env == "prod" || r.config.DebugLogs {
+				if r.config.DebugLogs {
 					fmt.Printf("📦 Cache HIT (gzip): /%s\n", routeKey)
 				}
 				w.Write(data)
@@ -221,7 +223,7 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		if data, err := os.ReadFile(cachedFile); err == nil {
 			etag := generateETag(data)
 			if match := req.Header.Get("If-None-Match"); match == etag {
-				if r.env == "prod" || r.config.DebugLogs {
+				if r.config.DebugLogs {
 					fmt.Printf("🧩 304 Not Modified: /%s\n", routeKey)
 				}
 				w.WriteHeader(http.StatusNotModified)
@@ -229,10 +231,11 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 			}
 			w.Header().Set("ETag", etag)
 			w.Header().Set("Content-Type", "text/html")
+			w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 			if r.config.DebugHeaders {
 				w.Header().Set("X-Barry-Cache", "HIT")
 			}
-			if r.env == "prod" || r.config.DebugLogs {
+			if r.config.DebugLogs {
 				fmt.Printf("📦 Cache HIT: /%s\n", routeKey)
 			}
 			w.Write(data)
@@ -315,6 +318,7 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 	}
 
 	w.Header().Set("Content-Type", "text/html")
+	w.Header().Set("Content-Length", strconv.Itoa(len(html)))
 	if r.config.DebugHeaders {
 		w.Header().Set("X-Barry-Cache", "MISS")
 	}
