@@ -144,11 +144,7 @@ func ExecuteServerFileWithTime(filePath string, params map[string]string, devMod
 
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
-	if devMode {
-		cmd.Stderr = io.MultiWriter(os.Stderr, &errBuf)
-	} else {
-		cmd.Stderr = &errBuf
-	}
+	cmd.Stderr = io.MultiWriter(os.Stderr, &errBuf)
 
 	err = cmd.Run()
 
