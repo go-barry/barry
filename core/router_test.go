@@ -24,6 +24,15 @@ func cleanupTestArtifacts() {
 	_ = os.Remove("layout.html")
 }
 
+type flushRecorder struct {
+	http.ResponseWriter
+	flushed bool
+}
+
+func (f *flushRecorder) Flush() {
+	f.flushed = true
+}
+
 func setupRouterTestEnv(t *testing.T) (Config, func()) {
 	routesDir := filepath.Join("routes", "test")
 	if err := os.MkdirAll(routesDir, 0755); err != nil {
@@ -1257,5 +1266,41 @@ func TestServeHTTP_API_MatchWithoutParams(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, "status") {
 		t.Errorf("expected JSON response, got: %s", body)
+	}
+}
+
+func TestRouter_ServeStatic_FlushCalled(t *testing.T) {
+	t.Cleanup(cleanupTestArtifacts)
+
+	cfg := Config{
+		OutputDir:    t.TempDir(),
+		CacheEnabled: false,
+		DebugLogs:    false,
+		DebugHeaders: false,
+	}
+
+	_ = os.MkdirAll("routes/test", 0755)
+	_ = os.WriteFile("routes/test/index.html", []byte(`<!-- layout: layout.html -->
+{{ define "content" }}<h1>Flush Test</h1>{{ end }}`), 0644)
+	_ = os.WriteFile("layout.html", []byte(`{{ define "layout" }}<html><body>{{ template "content" . }}</body></html>{{ end }}`), 0644)
+	_ = os.MkdirAll("components", 0755)
+
+	router := NewRouter(cfg, RuntimeContext{Env: "dev"}).(*Router)
+	router.routes = []Route{{
+		URLPattern: regexp.MustCompile("^test$"),
+		HTMLPath:   "routes/test/index.html",
+		ServerPath: "routes/test/index.server.go",
+		FilePath:   "routes/test",
+	}}
+
+	rec := httptest.NewRecorder()
+
+	fr := &flushRecorder{ResponseWriter: rec}
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	router.ServeHTTP(fr, req)
+
+	if !fr.flushed {
+		t.Errorf("expected Flush to be called, but it wasn't")
 	}
 }
