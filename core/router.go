@@ -20,11 +20,12 @@ import (
 )
 
 type Route struct {
-	URLPattern *regexp.Regexp
-	ParamKeys  []string
-	HTMLPath   string
-	ServerPath string
-	FilePath   string
+	URLPattern   *regexp.Regexp
+	ParamKeys    []string
+	ParamRawKeys []string
+	HTMLPath     string
+	ServerPath   string
+	FilePath     string
 }
 
 type Router struct {
@@ -72,6 +73,7 @@ type cacheWriteRequest struct {
 	RouteKey string
 	HTML     []byte
 	Lock     *sync.Mutex
+	Ext      string
 }
 
 var cacheLocks sync.Map
@@ -87,7 +89,7 @@ func init() {
 			copy(safeHTML, req.HTML)
 
 			req.Lock.Lock()
-			_ = SaveCachedHTMLFunc(req.Config, req.RouteKey, safeHTML)
+			_ = SaveCachedHTMLFunc(req.Config, req.RouteKey, req.Ext, safeHTML)
 			req.Lock.Unlock()
 		}
 	}()
@@ -136,19 +138,28 @@ func (r *Router) loadRoutes() {
 		}
 
 		htmlPath := filepath.Join(path, "index.html")
-		if _, err := os.Stat(htmlPath); err != nil {
+		xmlPath := filepath.Join(path, "index.xml")
+
+		hasHTML := fileExists(htmlPath)
+		hasXML := fileExists(xmlPath)
+
+		if !hasHTML && !hasXML {
 			return nil
 		}
 
 		rel := strings.TrimPrefix(path, "routes")
 		parts := strings.Split(strings.Trim(rel, "/"), "/")
 		paramKeys := []string{}
+		paramRawKeys := []string{}
 		pattern := ""
 
 		for _, part := range parts {
 			if strings.HasPrefix(part, "_") {
-				key := part[1:]
-				paramKeys = append(paramKeys, key)
+				rawKey := part[1:]
+				cleanKey := strings.TrimSuffix(rawKey, filepath.Ext(rawKey))
+
+				paramRawKeys = append(paramRawKeys, rawKey)
+				paramKeys = append(paramKeys, cleanKey)
 				pattern += "/([^/]+)"
 			} else {
 				pattern += "/" + part
@@ -158,11 +169,12 @@ func (r *Router) loadRoutes() {
 		regex := regexp.MustCompile("^" + strings.TrimPrefix(pattern, "/") + "$")
 
 		routes = append(routes, Route{
-			URLPattern: regex,
-			ParamKeys:  paramKeys,
-			HTMLPath:   htmlPath,
-			ServerPath: filepath.Join(path, "index.server.go"),
-			FilePath:   path,
+			URLPattern:   regex,
+			ParamKeys:    paramKeys,
+			ParamRawKeys: paramRawKeys,
+			HTMLPath:     choose(htmlPath, xmlPath),
+			ServerPath:   filepath.Join(path, "index.server.go"),
+			FilePath:     path,
 		})
 
 		return nil
@@ -186,6 +198,18 @@ func (r *Router) loadRoutes() {
 	r.routes = routes
 }
 
+func choose(a, b string) string {
+	if fileExists(a) {
+		return a
+	}
+	return b
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 func (r *Router) loadComponentFiles() {
 	var files []string
 	_ = filepath.Walk("components", func(path string, info os.FileInfo, err error) error {
@@ -203,11 +227,12 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		return
 	}
 
+	isXML := strings.HasSuffix(htmlPath, ".xml")
 	routeKey := strings.TrimPrefix(resolvedPath, "/")
 
 	if r.config.CacheEnabled {
 		cacheDir := filepath.Join(r.config.OutputDir, routeKey)
-		cachedFile := filepath.Join(cacheDir, "index.html")
+		cachedFile := filepath.Join(cacheDir, "index."+getFileExt(htmlPath))
 		gzFile := cachedFile + ".gz"
 
 		if r.env == "prod" && acceptsGzip(req) {
@@ -223,7 +248,7 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 				w.Header().Set("ETag", etag)
 				w.Header().Set("Content-Encoding", "gzip")
 				w.Header().Set("Vary", "Accept-Encoding")
-				w.Header().Set("Content-Type", "text/html")
+				w.Header().Set("Content-Type", getContentType(htmlPath))
 				w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 				if r.config.DebugHeaders {
 					w.Header().Set("X-Barry-Cache", "HIT")
@@ -246,7 +271,7 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 				return
 			}
 			w.Header().Set("ETag", etag)
-			w.Header().Set("Content-Type", "text/html")
+			w.Header().Set("Content-Type", getContentType(htmlPath))
 			w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 			if r.config.DebugHeaders {
 				w.Header().Set("X-Barry-Cache", "HIT")
@@ -257,14 +282,13 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 			w.Write(data)
 			return
 		}
-
 	}
 
 	data := map[string]interface{}{}
-	if _, err := os.Stat(serverPath); err == nil {
+	if fileExists(serverPath) {
 		lock := getOrCreateCompileLock(serverPath)
 		lock.Lock()
-		result, err := ExecuteServerFile(serverPath, params, r.env == "dev")
+		result, err := ExecuteServerFile(serverPath, req, params, r.env == "dev")
 		lock.Unlock()
 		if err != nil {
 			if IsNotFoundError(err) {
@@ -279,17 +303,9 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 
 	layoutPath := r.getLayoutPath(htmlPath)
 	tmplFiles := []string{}
-
-	if layoutPath != "" {
-		if _, err := os.Stat(layoutPath); err == nil {
-			tmplFiles = append(tmplFiles, layoutPath)
-		} else {
-			if r.config.DebugLogs {
-				fmt.Printf("⚠️ Skipping missing layout: %q\n", layoutPath)
-			}
-		}
+	if layoutPath != "" && fileExists(layoutPath) {
+		tmplFiles = append(tmplFiles, layoutPath)
 	}
-
 	tmplFiles = append(tmplFiles, htmlPath)
 	tmplFiles = append(tmplFiles, r.componentFiles...)
 
@@ -300,7 +316,6 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 		tmpl = val.(*template.Template)
 	} else {
 		tmpl = template.New("").Funcs(BarryTemplateFuncs(r.env, r.config.OutputDir))
-
 		parsed, err := tmpl.ParseFiles(tmplFiles...)
 		if err != nil {
 			fmt.Printf("❌ Template parse error [%s]: %v\n", cacheKey, err)
@@ -312,14 +327,19 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 	}
 
 	var rendered bytes.Buffer
-	if err := tmpl.ExecuteTemplate(&rendered, "layout", data); err != nil {
+	templateName := filepath.Base(htmlPath)
+	if layoutPath != "" && !isXML {
+		templateName = "layout"
+	}
+
+	if err := tmpl.ExecuteTemplate(&rendered, templateName, data); err != nil {
 		http.Error(w, "Template execution error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	html := rendered.Bytes()
 
-	if r.env == "dev" {
+	if r.env == "dev" && !isXML {
 		html = bytes.Replace(html, []byte("</body>"), []byte(`
 <script>
 	if (typeof WebSocket !== "undefined") {
@@ -333,7 +353,7 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 </body>`), 1)
 	}
 
-	w.Header().Set("Content-Type", "text/html")
+	w.Header().Set("Content-Type", getContentType(htmlPath))
 	w.Header().Set("Content-Length", strconv.Itoa(len(html)))
 	if r.config.DebugHeaders {
 		w.Header().Set("X-Barry-Cache", "MISS")
@@ -345,11 +365,13 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 
 	if r.config.CacheEnabled {
 		lock := getOrCreateLock(routeKey)
+		ext := getFileExt(htmlPath)
 		req := cacheWriteRequest{
 			Config:   r.config,
 			RouteKey: routeKey,
 			HTML:     append([]byte(nil), html...),
 			Lock:     lock,
+			Ext:      ext,
 		}
 
 		select {
@@ -363,7 +385,7 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 			}
 			go func() {
 				req.Lock.Lock()
-				err := SaveCachedHTMLFunc(req.Config, req.RouteKey, req.HTML)
+				err := SaveCachedHTMLFunc(req.Config, req.RouteKey, req.Ext, req.HTML)
 				req.Lock.Unlock()
 				if err != nil {
 					fmt.Printf("❌ Cache write failed (immediate): /%s → %v\n", req.RouteKey, err)
@@ -373,6 +395,23 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 			}()
 		}
 	}
+}
+
+func getContentType(path string) string {
+	switch filepath.Ext(path) {
+	case ".xml":
+		return "application/xml"
+	default:
+		return "text/html"
+	}
+}
+
+func getFileExt(path string) string {
+	ext := filepath.Ext(path)
+	if ext != "" {
+		return ext[1:]
+	}
+	return "html"
 }
 
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -386,8 +425,17 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			if matches := route.URLPattern.FindStringSubmatch(apiPath); matches != nil {
 				params := map[string]string{}
 				for i, key := range route.ParamKeys {
-					params[key] = matches[i+1]
+					rawKey := route.ParamRawKeys[i]
+					ext := filepath.Ext(rawKey)
+					value := matches[i+1]
+
+					if ext != "" && strings.HasSuffix(value, ext) {
+						value = strings.TrimSuffix(value, ext)
+					}
+
+					params[key] = value
 				}
+
 				r.handleAPI(recorder, req, route, params)
 				return
 			}
@@ -404,7 +452,15 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			if matches := route.URLPattern.FindStringSubmatch(path); matches != nil {
 				params := map[string]string{}
 				for i, key := range route.ParamKeys {
-					params[key] = matches[i+1]
+					rawKey := route.ParamRawKeys[i]
+					ext := filepath.Ext(rawKey)
+					value := matches[i+1]
+
+					if ext != "" && strings.HasSuffix(value, ext) {
+						value = strings.TrimSuffix(value, ext)
+					}
+
+					params[key] = value
 				}
 				r.serveStatic(route.HTMLPath, route.ServerPath, recorder, req, params, path)
 				found = true

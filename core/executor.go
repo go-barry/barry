@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -20,13 +21,16 @@ import (
 var nowFunc = time.Now
 var formatSource = format.Source
 
-var (
-	runnerTemplate = `package main
+var barryTmpDir = ".barry-tmp"
+var errorNotFoundMsg = "barry-error: barry: not found"
+
+var runnerTemplate = `package main
 
 import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"os"
 	target "{{ .ImportPath }}"
 )
@@ -34,7 +38,27 @@ import (
 func main() {
 	log.SetOutput(os.Stderr)
 
-	r := &http.Request{}
+	body := strings.NewReader({{ .Body | jsonMarshal }})
+	r, _ := http.NewRequest("{{ .Method }}", "{{ .URL }}", body)
+
+	for key, vals := range map[string][]string{
+		{{- range $k, $v := .Headers }}
+		"{{ $k }}": {{ $v | jsonMarshal }},
+		{{- end }}
+	} {
+		for _, v := range vals {
+			r.Header.Add(key, v)
+		}
+	}
+
+	r.Host = "{{ .Host }}"
+	r.RemoteAddr = "{{ .RemoteAddr }}"
+
+	if err := r.ParseForm(); err != nil {
+		log.Println("barry-error: failed to parse form:", err)
+		os.Exit(1)
+	}
+
 	params := map[string]string{
 		{{- range $k, $v := .Params }}
 		"{{ $k }}": "{{ $v }}",
@@ -51,17 +75,13 @@ func main() {
 }
 `
 
-	barryTmpDir      = ".barry-tmp"
-	errorPrefix      = "barry-error:"
-	errorNotFoundMsg = "barry-error: barry: not found"
-)
-
 var apiRunnerTemplate = `package main
 
 import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"os"
 	target "{{ .ImportPath }}"
 )
@@ -69,7 +89,27 @@ import (
 func main() {
 	log.SetOutput(os.Stderr)
 
-	r, _ := http.NewRequest("{{ .Method }}", "/?{{ .QueryString }}", nil)
+	body := strings.NewReader({{ .Body | jsonMarshal }})
+	r, _ := http.NewRequest("{{ .Method }}", "{{ .URL }}", body)
+
+	for key, vals := range map[string][]string{
+		{{- range $k, $v := .Headers }}
+		"{{ $k }}": {{ $v | jsonMarshal }},
+		{{- end }}
+	} {
+		for _, v := range vals {
+			r.Header.Add(key, v)
+		}
+	}
+
+	r.Host = "{{ .Host }}"
+	r.RemoteAddr = "{{ .RemoteAddr }}"
+
+	if err := r.ParseForm(); err != nil {
+		log.Println("barry-error: failed to parse form:", err)
+		os.Exit(1)
+	}
+
 	params := map[string]string{
 		{{- range $k, $v := .Params }}
 		"{{ $k }}": "{{ $v }}",
@@ -86,16 +126,56 @@ func main() {
 }
 `
 
+var templateFuncs = template.FuncMap{
+	"jsonMarshal": func(v interface{}) string {
+		switch val := v.(type) {
+		case string:
+			return strconv.Quote(val)
+		case []string:
+			var b strings.Builder
+			b.WriteString("[]string{")
+			for i, s := range val {
+				if i > 0 {
+					b.WriteString(", ")
+				}
+				b.WriteString(strconv.Quote(s))
+			}
+			b.WriteString("}")
+			return b.String()
+		default:
+			b, _ := json.Marshal(v)
+			return string(b)
+		}
+	},
+}
+
 type ExecContext struct {
 	ImportPath string
 	Params     map[string]string
+	Method     string
+	URL        string
+	Headers    map[string][]string
+	Body       string
+	Host       string
+	RemoteAddr string
 }
 
-var ExecuteServerFile = func(filePath string, params map[string]string, devMode bool) (map[string]interface{}, error) {
-	return ExecuteServerFileWithTime(filePath, params, devMode, time.Now)
+type APIExecContext struct {
+	ImportPath string
+	Params     map[string]string
+	Method     string
+	URL        string
+	Headers    map[string][]string
+	Body       string
+	Host       string
+	RemoteAddr string
 }
 
-func ExecuteServerFileWithTime(filePath string, params map[string]string, devMode bool, now func() time.Time) (map[string]interface{}, error) {
+var ExecuteServerFile = func(filePath string, req *http.Request, params map[string]string, devMode bool) (map[string]interface{}, error) {
+	return ExecuteServerFileWithTime(filePath, req, params, devMode, time.Now)
+}
+
+func ExecuteServerFileWithTime(filePath string, req *http.Request, params map[string]string, devMode bool, now func() time.Time) (map[string]interface{}, error) {
 	absPath, _ := filepath.Abs(filePath)
 
 	modRoot, moduleName, err := findGoModRoot(absPath)
@@ -110,13 +190,22 @@ func ExecuteServerFileWithTime(filePath string, params map[string]string, devMod
 
 	importPath := filepath.ToSlash(filepath.Join(moduleName, relPath))
 
+	bodyBytes, _ := io.ReadAll(req.Body)
+	req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+
 	ctx := ExecContext{
 		ImportPath: importPath,
 		Params:     params,
+		Method:     req.Method,
+		URL:        req.URL.String(),
+		Headers:    req.Header,
+		Body:       string(bodyBytes),
+		Host:       req.Host,
+		RemoteAddr: req.RemoteAddr,
 	}
 
 	var buf bytes.Buffer
-	tmpl := template.Must(template.New("runner").Parse(runnerTemplate))
+	tmpl := template.Must(template.New("runner").Funcs(templateFuncs).Parse(runnerTemplate))
 	if err := tmpl.Execute(&buf, ctx); err != nil {
 		return nil, fmt.Errorf("template execution error: %w", err)
 	}
@@ -127,7 +216,6 @@ func ExecuteServerFileWithTime(filePath string, params map[string]string, devMod
 	}
 
 	tmpRoot := filepath.Join(modRoot, barryTmpDir)
-
 	hash := sha256.Sum256([]byte(absPath + now().String()))
 	runDir := filepath.Join(tmpRoot, fmt.Sprintf("%x", hash[:8]))
 	if err := os.MkdirAll(runDir, os.ModePerm); err != nil {
@@ -147,7 +235,6 @@ func ExecuteServerFileWithTime(filePath string, params map[string]string, devMod
 	cmd.Stderr = io.MultiWriter(os.Stderr, &errBuf)
 
 	err = cmd.Run()
-
 	_ = os.RemoveAll(runDir)
 
 	if err != nil {
@@ -181,20 +268,22 @@ var ExecuteAPIFile = func(filePath string, req *http.Request, params map[string]
 
 	importPath := filepath.ToSlash(filepath.Join(moduleName, relPath))
 
-	ctx := struct {
-		ImportPath  string
-		Params      map[string]string
-		Method      string
-		QueryString string
-	}{
-		ImportPath:  importPath,
-		Params:      params,
-		Method:      req.Method,
-		QueryString: req.URL.RawQuery,
+	bodyBytes, _ := io.ReadAll(req.Body)
+	req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+
+	ctx := APIExecContext{
+		ImportPath: importPath,
+		Params:     params,
+		Method:     req.Method,
+		URL:        req.URL.String(),
+		Headers:    req.Header,
+		Body:       string(bodyBytes),
+		Host:       req.Host,
+		RemoteAddr: req.RemoteAddr,
 	}
 
 	var buf bytes.Buffer
-	tmpl := template.Must(template.New("api-runner").Parse(apiRunnerTemplate))
+	tmpl := template.Must(template.New("api-runner").Funcs(templateFuncs).Parse(apiRunnerTemplate))
 	if err := tmpl.Execute(&buf, ctx); err != nil {
 		return nil, fmt.Errorf("template execution error: %w", err)
 	}
@@ -207,7 +296,6 @@ var ExecuteAPIFile = func(filePath string, req *http.Request, params map[string]
 	tmpRoot := filepath.Join(modRoot, barryTmpDir)
 	hash := sha256.Sum256([]byte(absPath + req.Method + nowFunc().String()))
 	runDir := filepath.Join(tmpRoot, fmt.Sprintf("%x", hash[:8]))
-
 	if err := os.MkdirAll(runDir, os.ModePerm); err != nil {
 		return nil, fmt.Errorf("could not create temp dir: %w", err)
 	}

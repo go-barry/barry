@@ -324,7 +324,7 @@ func TestRouter_ServerFileReturnsNotFoundError(t *testing.T) {
 	}}
 
 	original := ExecuteServerFile
-	ExecuteServerFile = func(_ string, _ map[string]string, _ bool) (map[string]interface{}, error) {
+	ExecuteServerFile = func(_ string, _ *http.Request, _ map[string]string, _ bool) (map[string]interface{}, error) {
 		return nil, ErrNotFound
 	}
 	defer func() { ExecuteServerFile = original }()
@@ -383,7 +383,7 @@ func TestRouter_ServerFileReturnsGenericError(t *testing.T) {
 	}}
 
 	original := ExecuteServerFile
-	ExecuteServerFile = func(_ string, _ map[string]string, _ bool) (map[string]interface{}, error) {
+	ExecuteServerFile = func(_ string, _ *http.Request, _ map[string]string, _ bool) (map[string]interface{}, error) {
 		return nil, ErrNotFound
 	}
 	defer func() { ExecuteServerFile = original }()
@@ -655,7 +655,7 @@ func TestRouter_CacheQueueFull_ImmediateWriteWithLogs(t *testing.T) {
 
 	originalSave := SaveCachedHTMLFunc
 	defer func() { SaveCachedHTMLFunc = originalSave }()
-	SaveCachedHTMLFunc = func(_ Config, _ string, _ []byte) error {
+	SaveCachedHTMLFunc = func(_ Config, _ string, _ string, _ []byte) error {
 		return nil
 	}
 
@@ -739,7 +739,7 @@ func TestRouter_ServerFile_GenericErrorNoTemplate(t *testing.T) {
 	}}
 
 	original := ExecuteServerFile
-	ExecuteServerFile = func(_ string, _ map[string]string, _ bool) (map[string]interface{}, error) {
+	ExecuteServerFile = func(_ string, _ *http.Request, _ map[string]string, _ bool) (map[string]interface{}, error) {
 		return nil, errors.New("kaboom")
 	}
 	defer func() { ExecuteServerFile = original }()
@@ -899,7 +899,7 @@ func TestRouter_CacheQueueFull_ImmediateWriteErrorLogs(t *testing.T) {
 
 	originalSave := SaveCachedHTMLFunc
 	defer func() { SaveCachedHTMLFunc = originalSave }()
-	SaveCachedHTMLFunc = func(_ Config, _ string, _ []byte) error {
+	SaveCachedHTMLFunc = func(_ Config, _ string, _ string, _ []byte) error {
 		return errors.New("disk full")
 	}
 
@@ -971,7 +971,7 @@ func TestRouter_ParsesAndInjectsParams(t *testing.T) {
 	_ = os.MkdirAll("components", 0755)
 
 	original := ExecuteServerFile
-	ExecuteServerFile = func(_ string, params map[string]string, _ bool) (map[string]interface{}, error) {
+	ExecuteServerFile = func(_ string, _ *http.Request, params map[string]string, _ bool) (map[string]interface{}, error) {
 		out := map[string]interface{}{}
 		for k, v := range params {
 			out[k] = v
@@ -982,11 +982,12 @@ func TestRouter_ParsesAndInjectsParams(t *testing.T) {
 
 	router := NewRouter(cfg, RuntimeContext{Env: "dev"}).(*Router)
 	router.routes = []Route{{
-		URLPattern: regexp.MustCompile("^posts/([^/]+)$"),
-		ParamKeys:  []string{"id"},
-		HTMLPath:   "routes/posts/_id/index.html",
-		ServerPath: "routes/posts/_id/index.server.go",
-		FilePath:   "routes/posts/_id",
+		URLPattern:   regexp.MustCompile("^posts/([^/]+)$"),
+		ParamKeys:    []string{"id"},
+		ParamRawKeys: []string{"_id"},
+		HTMLPath:     "routes/posts/_id/index.html",
+		ServerPath:   "routes/posts/_id/index.server.go",
+		FilePath:     "routes/posts/_id",
 	}}
 
 	req := httptest.NewRequest(http.MethodGet, "/posts/abc123", nil)
@@ -1155,10 +1156,11 @@ func TestServeHTTP_API_MatchesAndInvokesHandler(t *testing.T) {
 		env: "dev",
 		apiRoutes: []ApiRoute{
 			{
-				URLPattern: regexp.MustCompile("^hello/([^/]+)$"),
-				ParamKeys:  []string{"id"},
-				ServerPath: "api/hello/_id/index.go",
-				FilePath:   "api/hello/_id",
+				URLPattern:   regexp.MustCompile("^hello/([^/]+)$"),
+				ParamKeys:    []string{"id"},
+				ParamRawKeys: []string{"_id"},
+				ServerPath:   "api/hello/_id/index.go",
+				FilePath:     "api/hello/_id",
 			},
 		},
 	}
@@ -1194,9 +1196,10 @@ func TestServeHTTP_API_MatchesWithMultipleParams(t *testing.T) {
 		env: "dev",
 		apiRoutes: []ApiRoute{
 			{
-				URLPattern: regexp.MustCompile("^user/([^/]+)/profile/([^/]+)$"),
-				ParamKeys:  []string{"userId", "section"},
-				ServerPath: "api/user/_userId/profile/_section/index.go",
+				URLPattern:   regexp.MustCompile("^user/([^/]+)/profile/([^/]+)$"),
+				ParamKeys:    []string{"userId", "section"},
+				ParamRawKeys: []string{"_userId", "_section"},
+				ServerPath:   "api/user/_userId/profile/_section/index.go",
 			},
 		},
 	}
@@ -1244,9 +1247,10 @@ func TestServeHTTP_API_MatchWithoutParams(t *testing.T) {
 		env: "dev",
 		apiRoutes: []ApiRoute{
 			{
-				URLPattern: regexp.MustCompile("^ping$"),
-				ParamKeys:  []string{},
-				ServerPath: "api/ping/index.go",
+				URLPattern:   regexp.MustCompile("^ping$"),
+				ParamKeys:    []string{},
+				ParamRawKeys: []string{},
+				ServerPath:   "api/ping/index.go",
 			},
 		},
 	}

@@ -12,9 +12,11 @@ var gzipWriterFactory = func(w io.Writer) io.WriteCloser {
 	return gzip.NewWriter(w)
 }
 
-func GetCachedHTML(config Config, route string) ([]byte, bool) {
-	cachePath := filepath.Join(config.OutputDir, route, "index.html")
-
+func GetCachedHTML(config Config, route, ext string) ([]byte, bool) {
+	if ext == "" {
+		ext = "html"
+	}
+	cachePath := filepath.Join(config.OutputDir, route, "index."+ext)
 	content, err := os.ReadFile(cachePath)
 	if err != nil {
 		return nil, false
@@ -22,17 +24,21 @@ func GetCachedHTML(config Config, route string) ([]byte, bool) {
 	return content, true
 }
 
-func SaveCachedHTML(config Config, routeKey string, html []byte) error {
+func SaveCachedHTML(config Config, routeKey, ext string, data []byte) error {
+	if ext == "" {
+		ext = "html"
+	}
 	outDir := filepath.Join(config.OutputDir, routeKey)
 	if err := os.MkdirAll(outDir, os.ModePerm); err != nil {
 		return fmt.Errorf("failed to create cache directory: %w", err)
 	}
 
-	htmlPath := filepath.Join(outDir, "index.html")
-	gzPath := htmlPath + ".gz"
+	filename := "index." + ext
+	filePath := filepath.Join(outDir, filename)
+	gzPath := filePath + ".gz"
 
-	if err := os.WriteFile(htmlPath, html, 0644); err != nil {
-		return fmt.Errorf("failed to write index.html: %w", err)
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write %s: %w", filename, err)
 	}
 
 	f, err := os.Create(gzPath)
@@ -44,8 +50,8 @@ func SaveCachedHTML(config Config, routeKey string, html []byte) error {
 	gz := gzipWriterFactory(f)
 	defer gz.Close()
 
-	if _, err := gz.Write(html); err != nil {
-		return fmt.Errorf("failed to write gzipped html: %w", err)
+	if _, err := gz.Write(data); err != nil {
+		return fmt.Errorf("failed to write gzipped %s: %w", filename, err)
 	}
 
 	return nil

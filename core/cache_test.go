@@ -15,14 +15,15 @@ func TestSaveCachedHTMLAndGetCachedHTML(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := Config{OutputDir: tmpDir}
 	route := "test-route"
+	ext := "html"
 	html := []byte("<html><body>Hello Barry!</body></html>")
 
-	err := SaveCachedHTML(cfg, route, html)
+	err := SaveCachedHTML(cfg, route, ext, html)
 	if err != nil {
 		t.Fatalf("SaveCachedHTML failed: %v", err)
 	}
 
-	htmlPath := filepath.Join(tmpDir, route, "index.html")
+	htmlPath := filepath.Join(tmpDir, route, "index."+ext)
 	data, err := os.ReadFile(htmlPath)
 	if err != nil {
 		t.Fatalf("Failed to read index.html: %v", err)
@@ -53,7 +54,7 @@ func TestSaveCachedHTMLAndGetCachedHTML(t *testing.T) {
 		t.Errorf("Gzipped content does not match original HTML")
 	}
 
-	cached, ok := GetCachedHTML(cfg, route)
+	cached, ok := GetCachedHTML(cfg, route, ext)
 	if !ok {
 		t.Errorf("Expected to find cached HTML, got false")
 	}
@@ -65,8 +66,9 @@ func TestSaveCachedHTMLAndGetCachedHTML(t *testing.T) {
 func TestGetCachedHTML_MissingFile(t *testing.T) {
 	cfg := Config{OutputDir: t.TempDir()}
 	route := "non-existent"
+	ext := "html"
 
-	data, ok := GetCachedHTML(cfg, route)
+	data, ok := GetCachedHTML(cfg, route, ext)
 	if ok {
 		t.Errorf("Expected ok=false for missing file")
 	}
@@ -83,7 +85,7 @@ func TestSaveCachedHTML_CreateDirFails(t *testing.T) {
 	}
 
 	cfg := Config{OutputDir: badPath}
-	err := SaveCachedHTML(cfg, "route", []byte("<html></html>"))
+	err := SaveCachedHTML(cfg, "route", "html", []byte("<html></html>"))
 	if err == nil || !strings.Contains(err.Error(), "failed to create cache directory") {
 		t.Errorf("expected directory creation error, got: %v", err)
 	}
@@ -98,7 +100,7 @@ func TestSaveCachedHTML_WriteHTMLFails(t *testing.T) {
 	defer os.Chmod(routePath, 0755)
 
 	cfg := Config{OutputDir: tmpDir}
-	err := SaveCachedHTML(cfg, "readonly", []byte("<html></html>"))
+	err := SaveCachedHTML(cfg, "readonly", "html", []byte("<html></html>"))
 	if err == nil || !strings.Contains(err.Error(), "failed to write index.html") {
 		t.Errorf("expected HTML write error, got: %v", err)
 	}
@@ -124,7 +126,7 @@ func TestSaveCachedHTML_CreateGzipFails(t *testing.T) {
 	}
 
 	cfg := Config{OutputDir: tmpDir}
-	err := SaveCachedHTML(cfg, route, []byte("<html>will fail gz create</html>"))
+	err := SaveCachedHTML(cfg, route, "html", []byte("<html>will fail gz create</html>"))
 
 	if err == nil || !strings.Contains(err.Error(), "failed to create gzip file") {
 		t.Errorf("Expected gzip create failure, got: %v", err)
@@ -136,7 +138,6 @@ type failingWriter struct{}
 func (f *failingWriter) Write(p []byte) (int, error) {
 	return 0, fmt.Errorf("simulated write failure")
 }
-
 func (f *failingWriter) Close() error {
 	return nil
 }
@@ -151,9 +152,9 @@ func TestSaveCachedHTML_GzipWriteFails(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	cfg := Config{OutputDir: tmpDir}
-	err := SaveCachedHTML(cfg, "write-error", []byte("<html>failure</html>"))
+	err := SaveCachedHTML(cfg, "write-error", "html", []byte("<html>failure</html>"))
 
-	if err == nil || !strings.Contains(err.Error(), "failed to write gzipped html") {
+	if err == nil || !strings.Contains(err.Error(), "failed to write gzipped index.html") {
 		t.Errorf("Expected gzip write failure, got: %v", err)
 	}
 }
