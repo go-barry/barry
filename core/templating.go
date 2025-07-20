@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	sprig "github.com/Masterminds/sprig/v3"
 	"github.com/tdewolff/minify/v2"
 	mincss "github.com/tdewolff/minify/v2/css"
 	minjs "github.com/tdewolff/minify/v2/js"
@@ -89,57 +90,60 @@ func MinifyAsset(env, path string, cacheDir string) string {
 }
 
 func BarryTemplateFuncs(env, cacheDir string) template.FuncMap {
-	return template.FuncMap{
-		"minify": func(path string) string {
-			return MinifyAsset(env, path, cacheDir)
-		},
-		"props": func(values ...interface{}) map[string]interface{} {
-			if len(values)%2 != 0 {
-				panic("props must be called with even number of arguments")
-			}
-			m := make(map[string]interface{}, len(values)/2)
-			for i := 0; i < len(values); i += 2 {
-				key, ok := values[i].(string)
-				if !ok {
-					panic("props keys must be strings")
-				}
-				m[key] = values[i+1]
-			}
-			return m
-		},
-		"safeHTML": func(s interface{}) template.HTML {
-			switch val := s.(type) {
-			case template.HTML:
-				return val
-			case string:
-				return template.HTML(val)
-			default:
-				return ""
-			}
-		},
-		"versioned": func(path string) string {
-			if !strings.HasPrefix(path, "/static/") {
-				return path
-			}
+	funcs := sprig.HtmlFuncMap()
 
-			rel := strings.TrimPrefix(path, "/static/")
-			locations := []string{
-				filepath.Join("public", rel),
-				filepath.Join(cacheDir, "static", rel),
-			}
-
-			for _, file := range locations {
-				if content, err := os.ReadFile(file); err == nil {
-					h := md5.New()
-					h.Write(content)
-					hash := hex.EncodeToString(h.Sum(nil))[:6]
-					var out strings.Builder
-					fmt.Fprintf(&out, "/static/%s?v=%s", rel, hash)
-					return out.String()
-				}
-			}
-
-			return path
-		},
+	funcs["minify"] = func(path string) string {
+		return MinifyAsset(env, path, cacheDir)
 	}
+
+	funcs["props"] = func(values ...interface{}) map[string]interface{} {
+		if len(values)%2 != 0 {
+			panic("props must be called with even number of arguments")
+		}
+		m := make(map[string]interface{}, len(values)/2)
+		for i := 0; i < len(values); i += 2 {
+			key, ok := values[i].(string)
+			if !ok {
+				panic("props keys must be strings")
+			}
+			m[key] = values[i+1]
+		}
+		return m
+	}
+
+	funcs["safeHTML"] = func(s interface{}) template.HTML {
+		switch val := s.(type) {
+		case template.HTML:
+			return val
+		case string:
+			return template.HTML(val)
+		default:
+			return ""
+		}
+	}
+
+	funcs["versioned"] = func(path string) string {
+		if !strings.HasPrefix(path, "/static/") {
+			return path
+		}
+
+		rel := strings.TrimPrefix(path, "/static/")
+		locations := []string{
+			filepath.Join("public", rel),
+			filepath.Join(cacheDir, "static", rel),
+		}
+
+		for _, file := range locations {
+			if content, err := os.ReadFile(file); err == nil {
+				h := md5.New()
+				h.Write(content)
+				hash := hex.EncodeToString(h.Sum(nil))[:6]
+				return fmt.Sprintf("/static/%s?v=%s", rel, hash)
+			}
+		}
+
+		return path
+	}
+
+	return funcs
 }
