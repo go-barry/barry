@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -165,6 +166,21 @@ func (r *Router) loadRoutes() {
 		})
 
 		return nil
+	})
+
+	sort.SliceStable(routes, func(i, j int) bool {
+		isDynamic := func(parts []string) bool {
+			for _, part := range parts {
+				if strings.HasPrefix(part, "_") {
+					return true
+				}
+			}
+			return false
+		}
+		pi := strings.Split(strings.TrimPrefix(routes[i].FilePath, "routes/"), "/")
+		pj := strings.Split(strings.TrimPrefix(routes[j].FilePath, "routes/"), "/")
+
+		return !isDynamic(pi) && isDynamic(pj)
 	})
 
 	r.routes = routes
@@ -325,9 +341,6 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 	w.Write(html)
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
-	}
-	if r.env == "dev" {
-		fmt.Printf("[Barry] Response flushed at %v\n", time.Now().Format(time.RFC3339Nano))
 	}
 
 	if r.config.CacheEnabled {
