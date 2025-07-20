@@ -1304,3 +1304,36 @@ func TestRouter_ServeStatic_FlushCalled(t *testing.T) {
 		t.Errorf("expected Flush to be called, but it wasn't")
 	}
 }
+
+func TestRouter_LoadRoutes_StaticBeforeDynamic(t *testing.T) {
+	t.Cleanup(cleanupTestArtifacts)
+
+	_ = os.MkdirAll("routes/_dynamic", 0755)
+	_ = os.WriteFile("routes/_dynamic/index.html", []byte(`<!-- layout: layout.html -->
+{{ define "content" }}<h1>Dynamic Fallback</h1>{{ end }}`), 0644)
+
+	_ = os.MkdirAll("routes/about", 0755)
+	_ = os.WriteFile("routes/about/index.html", []byte(`<!-- layout: layout.html -->
+{{ define "content" }}<h1>About Page</h1>{{ end }}`), 0644)
+
+	_ = os.WriteFile("layout.html", []byte(`{{ define "layout" }}<html><body>{{ template "content" . }}</body></html>{{ end }}`), 0644)
+	_ = os.MkdirAll("components", 0755)
+
+	cfg := Config{
+		OutputDir:    t.TempDir(),
+		CacheEnabled: false,
+		DebugLogs:    true,
+	}
+
+	router := NewRouter(cfg, RuntimeContext{Env: "dev"}).(*Router)
+
+	req := httptest.NewRequest(http.MethodGet, "/about", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "About Page") {
+		t.Errorf("expected static route to be matched first, got: %s", body)
+	}
+}
