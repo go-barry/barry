@@ -2,7 +2,7 @@
 
 <a href="https://go-barry.dev">![Barry logo](/header.jpg)</a>
 [![Go Reference](https://pkg.go.dev/badge/github.com/go-barry/barry.svg)](https://pkg.go.dev/github.com/go-barry/barry) [![codecov](https://codecov.io/github/go-barry/barry/graph/badge.svg?token=A8UVSOR3TN)](https://codecov.io/github/go-barry/barry)
-
+[![Tests](https://github.com/go-barry/barry/actions/workflows/tests.yml/badge.svg)](https://github.com/go-barry/barry/actions/workflows/tests.yml)
 
 [go-barry.dev](https:///go-barry.dev)
 
