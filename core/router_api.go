@@ -9,11 +9,12 @@ import (
 )
 
 type ApiRoute struct {
-	Method     string
-	URLPattern *regexp.Regexp
-	ParamKeys  []string
-	ServerPath string
-	FilePath   string
+	Method       string
+	URLPattern   *regexp.Regexp
+	ParamKeys    []string
+	ParamRawKeys []string
+	ServerPath   string
+	FilePath     string
 }
 
 func (r *Router) loadApiRoutes() {
@@ -35,12 +36,16 @@ func (r *Router) loadApiRoutes() {
 		rel := strings.TrimPrefix(path, "api")
 		parts := strings.Split(strings.Trim(rel, "/"), "/")
 		paramKeys := []string{}
+		paramRawKeys := []string{}
 		pattern := ""
 
 		for _, part := range parts {
 			if strings.HasPrefix(part, "_") {
-				key := part[1:]
-				paramKeys = append(paramKeys, key)
+				rawKey := part[1:]
+				cleanKey := strings.TrimSuffix(rawKey, filepath.Ext(rawKey))
+
+				paramRawKeys = append(paramRawKeys, rawKey)
+				paramKeys = append(paramKeys, cleanKey)
 				pattern += "/([^/]+)"
 			} else {
 				pattern += "/" + part
@@ -50,12 +55,14 @@ func (r *Router) loadApiRoutes() {
 		regex := regexp.MustCompile("^" + strings.TrimPrefix(pattern, "/") + "$")
 
 		routes = append(routes, ApiRoute{
-			Method:     "ANY",
-			URLPattern: regex,
-			ParamKeys:  paramKeys,
-			ServerPath: filePath,
-			FilePath:   path,
+			Method:       "ANY",
+			URLPattern:   regex,
+			ParamKeys:    paramKeys,
+			ParamRawKeys: paramRawKeys,
+			ServerPath:   filePath,
+			FilePath:     path,
 		})
+
 		return nil
 	})
 

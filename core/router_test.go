@@ -324,7 +324,7 @@ func TestRouter_ServerFileReturnsNotFoundError(t *testing.T) {
 	}}
 
 	original := ExecuteServerFile
-	ExecuteServerFile = func(_ string, _ map[string]string, _ bool) (map[string]interface{}, error) {
+	ExecuteServerFile = func(_ string, _ *http.Request, _ map[string]string, _ bool) (map[string]interface{}, error) {
 		return nil, ErrNotFound
 	}
 	defer func() { ExecuteServerFile = original }()
@@ -383,7 +383,7 @@ func TestRouter_ServerFileReturnsGenericError(t *testing.T) {
 	}}
 
 	original := ExecuteServerFile
-	ExecuteServerFile = func(_ string, _ map[string]string, _ bool) (map[string]interface{}, error) {
+	ExecuteServerFile = func(_ string, _ *http.Request, _ map[string]string, _ bool) (map[string]interface{}, error) {
 		return nil, ErrNotFound
 	}
 	defer func() { ExecuteServerFile = original }()
@@ -655,7 +655,7 @@ func TestRouter_CacheQueueFull_ImmediateWriteWithLogs(t *testing.T) {
 
 	originalSave := SaveCachedHTMLFunc
 	defer func() { SaveCachedHTMLFunc = originalSave }()
-	SaveCachedHTMLFunc = func(_ Config, _ string, _ []byte) error {
+	SaveCachedHTMLFunc = func(_ Config, _ string, _ string, _ []byte) error {
 		return nil
 	}
 
@@ -739,7 +739,7 @@ func TestRouter_ServerFile_GenericErrorNoTemplate(t *testing.T) {
 	}}
 
 	original := ExecuteServerFile
-	ExecuteServerFile = func(_ string, _ map[string]string, _ bool) (map[string]interface{}, error) {
+	ExecuteServerFile = func(_ string, _ *http.Request, _ map[string]string, _ bool) (map[string]interface{}, error) {
 		return nil, errors.New("kaboom")
 	}
 	defer func() { ExecuteServerFile = original }()
@@ -899,7 +899,7 @@ func TestRouter_CacheQueueFull_ImmediateWriteErrorLogs(t *testing.T) {
 
 	originalSave := SaveCachedHTMLFunc
 	defer func() { SaveCachedHTMLFunc = originalSave }()
-	SaveCachedHTMLFunc = func(_ Config, _ string, _ []byte) error {
+	SaveCachedHTMLFunc = func(_ Config, _ string, _ string, _ []byte) error {
 		return errors.New("disk full")
 	}
 
@@ -952,54 +952,81 @@ func TestRouter_ServesIndexAtRoot(t *testing.T) {
 	}
 }
 
-func TestRouter_ParsesAndInjectsParams(t *testing.T) {
+func TestRouter_ParsesAndInjectsParams_WithExtension(t *testing.T) {
 	t.Cleanup(cleanupTestArtifacts)
 
-	cfg := Config{
-		OutputDir:    t.TempDir(),
-		CacheEnabled: false,
-		DebugLogs:    true,
-		DebugHeaders: false,
-	}
+	cfg := Config{OutputDir: t.TempDir()}
 
 	_ = os.MkdirAll("routes/posts/_id", 0755)
 	_ = os.WriteFile("routes/posts/_id/index.html", []byte(`<!-- layout: layout.html -->
 {{ define "content" }}<h1>Post ID: {{ .id }}</h1>{{ end }}`), 0644)
-	_ = os.WriteFile("routes/posts/_id/index.server.go", []byte("// mock server logic"), 0644)
-
+	_ = os.WriteFile("routes/posts/_id/index.server.go", []byte(""), 0644)
 	_ = os.WriteFile("layout.html", []byte(`{{ define "layout" }}<html><body>{{ template "content" . }}</body></html>{{ end }}`), 0644)
 	_ = os.MkdirAll("components", 0755)
 
 	original := ExecuteServerFile
-	ExecuteServerFile = func(_ string, params map[string]string, _ bool) (map[string]interface{}, error) {
-		out := map[string]interface{}{}
-		for k, v := range params {
-			out[k] = v
-		}
-		return out, nil
+	ExecuteServerFile = func(_ string, _ *http.Request, params map[string]string, _ bool) (map[string]interface{}, error) {
+		return map[string]interface{}{"id": params["id"]}, nil
 	}
 	defer func() { ExecuteServerFile = original }()
 
 	router := NewRouter(cfg, RuntimeContext{Env: "dev"}).(*Router)
 	router.routes = []Route{{
-		URLPattern: regexp.MustCompile("^posts/([^/]+)$"),
-		ParamKeys:  []string{"id"},
-		HTMLPath:   "routes/posts/_id/index.html",
-		ServerPath: "routes/posts/_id/index.server.go",
-		FilePath:   "routes/posts/_id",
+		URLPattern:   regexp.MustCompile("^posts/([^/]+)$"),
+		ParamKeys:    []string{"id"},
+		ParamRawKeys: []string{"_id.html"},
+		HTMLPath:     "routes/posts/_id/index.html",
+		ServerPath:   "routes/posts/_id/index.server.go",
+		FilePath:     "routes/posts/_id",
 	}}
 
-	req := httptest.NewRequest(http.MethodGet, "/posts/abc123", nil)
+	req := httptest.NewRequest(http.MethodGet, "/posts/123.html", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Errorf("expected 200 OK, got %d", rec.Code)
+		t.Fatalf("expected 200 OK, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Post ID: 123") {
+		t.Errorf("expected param '123', got: %s", rec.Body.String())
+	}
+}
+
+func TestServeHTTP_API_ParamSuffixStripped(t *testing.T) {
+	t.Cleanup(cleanupTestArtifacts)
+
+	original := ExecuteAPIFile
+	defer func() { ExecuteAPIFile = original }()
+
+	captured := map[string]string{}
+
+	ExecuteAPIFile = func(path string, req *http.Request, params map[string]string, devMode bool) ([]byte, error) {
+		captured = params
+		return []byte(`{"ok":true}`), nil
 	}
 
-	body := rec.Body.String()
-	if !strings.Contains(body, "Post ID: abc123") {
-		t.Errorf("expected param injected, got: %s", body)
+	r := &Router{
+		env: "dev",
+		apiRoutes: []ApiRoute{
+			{
+				URLPattern:   regexp.MustCompile("^item/([^/]+)$"),
+				ParamKeys:    []string{"slug"},
+				ParamRawKeys: []string{"_slug.json"},
+				ServerPath:   "api/item/_slug/index.go",
+			},
+		},
+	}
+
+	req := httptest.NewRequest("GET", "/api/item/example.json", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", rec.Code)
+	}
+
+	if captured["slug"] != "example" {
+		t.Errorf("expected param 'example', got: %v", captured)
 	}
 }
 
@@ -1155,10 +1182,11 @@ func TestServeHTTP_API_MatchesAndInvokesHandler(t *testing.T) {
 		env: "dev",
 		apiRoutes: []ApiRoute{
 			{
-				URLPattern: regexp.MustCompile("^hello/([^/]+)$"),
-				ParamKeys:  []string{"id"},
-				ServerPath: "api/hello/_id/index.go",
-				FilePath:   "api/hello/_id",
+				URLPattern:   regexp.MustCompile("^hello/([^/]+)$"),
+				ParamKeys:    []string{"id"},
+				ParamRawKeys: []string{"_id"},
+				ServerPath:   "api/hello/_id/index.go",
+				FilePath:     "api/hello/_id",
 			},
 		},
 	}
@@ -1194,9 +1222,10 @@ func TestServeHTTP_API_MatchesWithMultipleParams(t *testing.T) {
 		env: "dev",
 		apiRoutes: []ApiRoute{
 			{
-				URLPattern: regexp.MustCompile("^user/([^/]+)/profile/([^/]+)$"),
-				ParamKeys:  []string{"userId", "section"},
-				ServerPath: "api/user/_userId/profile/_section/index.go",
+				URLPattern:   regexp.MustCompile("^user/([^/]+)/profile/([^/]+)$"),
+				ParamKeys:    []string{"userId", "section"},
+				ParamRawKeys: []string{"_userId", "_section"},
+				ServerPath:   "api/user/_userId/profile/_section/index.go",
 			},
 		},
 	}
@@ -1244,9 +1273,10 @@ func TestServeHTTP_API_MatchWithoutParams(t *testing.T) {
 		env: "dev",
 		apiRoutes: []ApiRoute{
 			{
-				URLPattern: regexp.MustCompile("^ping$"),
-				ParamKeys:  []string{},
-				ServerPath: "api/ping/index.go",
+				URLPattern:   regexp.MustCompile("^ping$"),
+				ParamKeys:    []string{},
+				ParamRawKeys: []string{},
+				ServerPath:   "api/ping/index.go",
 			},
 		},
 	}
@@ -1335,5 +1365,48 @@ func TestRouter_LoadRoutes_StaticBeforeDynamic(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, "About Page") {
 		t.Errorf("expected static route to be matched first, got: %s", body)
+	}
+}
+
+func TestChoose_ReturnsSecondIfFirstDoesNotExist(t *testing.T) {
+	tmpDir := t.TempDir()
+	xmlPath := filepath.Join(tmpDir, "index.xml")
+	err := os.WriteFile(xmlPath, []byte(`<rss></rss>`), 0644)
+	if err != nil {
+		t.Fatalf("failed to write xml: %v", err)
+	}
+
+	result := choose("nonexistent.html", xmlPath)
+
+	if result != xmlPath {
+		t.Errorf("expected xmlPath to be returned, got %s", result)
+	}
+}
+
+func TestGetContentType(t *testing.T) {
+	if got := getContentType("sitemap.xml"); got != "application/xml" {
+		t.Errorf("expected application/xml, got %s", got)
+	}
+
+	if got := getContentType("index.html"); got != "text/html" {
+		t.Errorf("expected text/html, got %s", got)
+	}
+
+	if got := getContentType("unknown"); got != "text/html" {
+		t.Errorf("expected text/html for unknown extension, got %s", got)
+	}
+}
+
+func TestGetFileExt(t *testing.T) {
+	if got := getFileExt("index.html"); got != "html" {
+		t.Errorf("expected html, got %s", got)
+	}
+
+	if got := getFileExt("file.with.multiple.dots.xml"); got != "xml" {
+		t.Errorf("expected xml, got %s", got)
+	}
+
+	if got := getFileExt("README"); got != "html" {
+		t.Errorf("expected fallback html, got %s", got)
 	}
 }
