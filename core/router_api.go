@@ -70,7 +70,7 @@ func (r *Router) loadApiRoutes() {
 }
 
 func (r *Router) handleAPI(w http.ResponseWriter, req *http.Request, route ApiRoute, params map[string]string) {
-	result, err := ExecuteAPIFile(route.ServerPath, req, params, r.env == "dev")
+	result, err := ExecuteAPIFile(route.ServerPath, req, params)
 	if err != nil {
 		if IsNotFoundError(err) {
 			http.Error(w, "Not Found", http.StatusNotFound)

@@ -288,7 +288,7 @@ func (r *Router) serveStatic(htmlPath, serverPath string, w http.ResponseWriter,
 	if fileExists(serverPath) {
 		lock := getOrCreateCompileLock(serverPath)
 		lock.Lock()
-		result, err := ExecuteServerFile(serverPath, req, params, r.env == "dev")
+		result, err := ExecuteServerFile(serverPath, req, params)
 		lock.Unlock()
 		if err != nil {
 			if IsNotFoundError(err) {

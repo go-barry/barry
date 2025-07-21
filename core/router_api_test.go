@@ -90,7 +90,7 @@ var _origExecuteAPIFile = ExecuteAPIFile
 func TestHandleAPI_ReturnsJSON(t *testing.T) {
 	defer func() { ExecuteAPIFile = _origExecuteAPIFile }()
 
-	ExecuteAPIFile = func(path string, req *http.Request, params map[string]string, devMode bool) ([]byte, error) {
+	ExecuteAPIFile = func(path string, req *http.Request, params map[string]string) ([]byte, error) {
 		return []byte(`{"hello":"world"}`), nil
 	}
 
@@ -117,7 +117,7 @@ func TestHandleAPI_ReturnsJSON(t *testing.T) {
 func TestHandleAPI_NotFound(t *testing.T) {
 	defer func() { ExecuteAPIFile = _origExecuteAPIFile }()
 
-	ExecuteAPIFile = func(path string, req *http.Request, params map[string]string, devMode bool) ([]byte, error) {
+	ExecuteAPIFile = func(path string, req *http.Request, params map[string]string) ([]byte, error) {
 		return nil, ErrNotFound
 	}
 
@@ -140,7 +140,7 @@ func TestHandleAPI_NotFound(t *testing.T) {
 func TestHandleAPI_InternalError(t *testing.T) {
 	defer func() { ExecuteAPIFile = _origExecuteAPIFile }()
 
-	ExecuteAPIFile = func(path string, req *http.Request, params map[string]string, devMode bool) ([]byte, error) {
+	ExecuteAPIFile = func(path string, req *http.Request, params map[string]string) ([]byte, error) {
 		return nil, fmt.Errorf("boom")
 	}
 

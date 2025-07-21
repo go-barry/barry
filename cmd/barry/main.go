@@ -19,6 +19,7 @@ func newApp() *clilib.App {
 			barrycli.CleanCommand,
 			barrycli.CheckCommand,
 			barrycli.InfoCommand,
+			barrycli.BuildCommand,
 		},
 	}
 }
