@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -640,5 +641,52 @@ func TestExecuteAPIFile_WriteFileFails(t *testing.T) {
 	_, err := ExecuteAPIFile(apiFile, req, nil, false)
 	if err == nil || !strings.Contains(err.Error(), "could not write temp file") {
 		t.Fatalf("expected write file error, got: %v", err)
+	}
+}
+
+func Test_jsonMarshalFunc(t *testing.T) {
+	fnRaw, ok := templateFuncs["jsonMarshal"]
+	if !ok {
+		t.Fatal("jsonMarshal not found in templateFuncs")
+	}
+
+	fn, ok := fnRaw.(func(interface{}) string)
+	if !ok {
+		t.Fatal("jsonMarshal has unexpected type")
+	}
+
+	type testCase struct {
+		input    interface{}
+		expected string
+	}
+
+	tests := []testCase{
+		{
+			input:    []string{"a", "b", "c"},
+			expected: `[]string{"a", "b", "c"}`,
+		},
+		{
+			input:    []string{"onlyOne"},
+			expected: `[]string{"onlyOne"}`,
+		},
+		{
+			input:    "plain string",
+			expected: strconv.Quote("plain string"),
+		},
+		{
+			input:    123,
+			expected: "123",
+		},
+		{
+			input:    map[string]int{"x": 1},
+			expected: `{"x":1}`,
+		},
+	}
+
+	for _, tc := range tests {
+		result := fn(tc.input)
+		if result != tc.expected {
+			t.Errorf("jsonMarshal(%#v) = %s; want %s", tc.input, result, tc.expected)
+		}
 	}
 }

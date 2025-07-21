@@ -158,3 +158,45 @@ func TestSaveCachedHTML_GzipWriteFails(t *testing.T) {
 		t.Errorf("Expected gzip write failure, got: %v", err)
 	}
 }
+
+func TestGetCachedHTML_DefaultExtension(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := Config{OutputDir: tmpDir}
+	route := "default-ext"
+	html := []byte("<html><body>Default Extension</body></html>")
+
+	err := SaveCachedHTML(cfg, route, "", html)
+	if err != nil {
+		t.Fatalf("SaveCachedHTML with default ext failed: %v", err)
+	}
+
+	data, ok := GetCachedHTML(cfg, route, "")
+	if !ok {
+		t.Fatalf("Expected cached HTML to be found with default ext")
+	}
+	if !bytes.Equal(data, html) {
+		t.Errorf("Expected content to match original HTML")
+	}
+}
+
+func TestSaveCachedHTML_CustomExtension(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := Config{OutputDir: tmpDir}
+	route := "custom-ext"
+	data := []byte("<root><msg>XML test</msg></root>")
+	ext := "xml"
+
+	err := SaveCachedHTML(cfg, route, ext, data)
+	if err != nil {
+		t.Fatalf("SaveCachedHTML failed for .xml: %v", err)
+	}
+
+	xmlPath := filepath.Join(tmpDir, route, "index.xml")
+	contents, err := os.ReadFile(xmlPath)
+	if err != nil {
+		t.Fatalf("Failed to read index.xml: %v", err)
+	}
+	if !bytes.Equal(contents, data) {
+		t.Errorf("Expected written XML to match original")
+	}
+}
