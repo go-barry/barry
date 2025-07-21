@@ -1,8 +1,7 @@
 package core
 
 import (
-	"crypto/sha256"
-	"fmt"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestFindGoModRoot(t *testing.T) {
@@ -45,648 +43,487 @@ func TestFindGoModRoot(t *testing.T) {
 	}
 }
 
-func TestExecuteServerFile_GoModNotFound(t *testing.T) {
-	tmp := t.TempDir()
+func Test_jsonMarshalFunc_string_and_slice(t *testing.T) {
+	jsonFunc, ok := templateFuncs["jsonMarshal"].(func(interface{}) string)
+	if !ok {
+		t.Fatal("jsonMarshal function not found or has wrong type")
+	}
 
-	serverPath := filepath.Join(tmp, "index.server.go")
-	_ = os.WriteFile(serverPath, []byte("// dummy"), 0644)
+	str := jsonFunc("hello")
+	if str != strconv.Quote("hello") {
+		t.Errorf("expected quoted string, got %s", str)
+	}
 
-	_, err := ExecuteServerFile(serverPath, nil, map[string]string{}, false)
-	if err == nil || !strings.Contains(err.Error(), "could not resolve go.mod") {
-		t.Fatalf("expected go.mod resolution error, got: %v", err)
+	slice := jsonFunc([]string{"a", "b"})
+	expected := `[]string{"a", "b"}`
+	if slice != expected {
+		t.Errorf("expected %s, got %s", expected, slice)
+	}
+
+	obj := jsonFunc(map[string]int{"count": 42})
+	if !strings.Contains(obj, `"count":42`) {
+		t.Errorf("expected JSON string, got %s", obj)
 	}
 }
 
-func TestExecuteServerFile_BasicSuccess(t *testing.T) {
-	tmp := t.TempDir()
+func TestExecuteAPIFileWithSubprocess_JSONEncode(t *testing.T) {
+	original := ExecuteServerFileWithSubprocessFunc
+	defer func() { ExecuteServerFileWithSubprocessFunc = original }()
 
-	goMod := []byte("module example.com/barrytest\n\ngo 1.20\n")
-	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), goMod, 0644)
+	ExecuteServerFileWithSubprocessFunc = func(fp string, r *http.Request, p map[string]string) (map[string]interface{}, error) {
+		return map[string]interface{}{"status": "ok"}, nil
+	}
 
-	routeDir := filepath.Join(tmp, "routes", "foo")
-	_ = os.MkdirAll(routeDir, 0755)
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	params := map[string]string{"foo": "bar"}
 
-	serverCode := `package foo
-
-import "net/http"
-
-func HandleRequest(r *http.Request, params map[string]string) (map[string]interface{}, error) {
-	return map[string]interface{}{
-		"foo": "bar",
-	}, nil
-}
-`
-	serverPath := filepath.Join(routeDir, "index.server.go")
-	_ = os.WriteFile(serverPath, []byte(serverCode), 0644)
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-
-	result, err := ExecuteServerFile(serverPath, req, map[string]string{}, false)
+	resp, err := ExecuteAPIFileWithSubprocess("fake.go", req, params)
 	if err != nil {
-		t.Fatalf("ExecuteServerFile failed: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if val, ok := result["foo"]; !ok || val != "bar" {
-		t.Errorf(`expected result["foo"] = "bar", got: %+v`, result)
+	if !strings.Contains(string(resp), "ok") {
+		t.Errorf("expected response to contain 'ok', got %s", string(resp))
 	}
 }
 
-func TestExecuteServerFile_NotFoundError(t *testing.T) {
-	tmp := t.TempDir()
-	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/barrytest\n\ngo 1.20\n"), 0644)
-
-	routeDir := filepath.Join(tmp, "routes", "404test")
-	_ = os.MkdirAll(routeDir, 0755)
-
-	serverCode := `package test
-
-import (
-	"errors"
-	"net/http"
-)
-
-func HandleRequest(r *http.Request, params map[string]string) (map[string]interface{}, error) {
-	return nil, errors.New("barry: not found")
+func TestExecuteServerFileWithSubprocess_missingGoMod(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	_, err := ExecuteServerFileWithSubprocess("/nonexistent/path/to/server.go", req, nil)
+	if err == nil || !strings.Contains(err.Error(), "could not resolve go.mod") {
+		t.Errorf("expected go.mod error, got %v", err)
+	}
 }
-`
-	serverPath := filepath.Join(routeDir, "index.server.go")
-	_ = os.WriteFile(serverPath, []byte(serverCode), 0644)
+
+func TestExecuteServerFileWithSubprocess_invalidImportPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	goModPath := filepath.Join(tmpDir, "go.mod")
+	os.WriteFile(goModPath, []byte("module example.com/testmod\n"), 0644)
+
+	badPath := filepath.Join(tmpDir, "nested", "handler.go")
+	os.MkdirAll(filepath.Dir(badPath), 0755)
+	os.WriteFile(badPath, []byte("package main"), 0644)
+
+	req := httptest.NewRequest(http.MethodPost, "/some/path", strings.NewReader("body=data"))
+	_, err := ExecuteServerFileWithSubprocess(badPath, req, map[string]string{"id": "123"})
+
+	if err == nil {
+		t.Errorf("expected error due to 'go run' failure, got nil")
+	}
+}
+
+func TestExecuteServerFile_pluginReturnsResult(t *testing.T) {
+	original := LoadPluginAndCallFunc
+	defer func() { LoadPluginAndCallFunc = original }()
+
+	LoadPluginAndCallFunc = func(fp string, r *http.Request, p map[string]string) (map[string]interface{}, error) {
+		return map[string]interface{}{"plugin": "value"}, nil
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/plugin", nil)
+	result, err := ExecuteServerFile("dummy.go", req, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result["plugin"] != "value" {
+		t.Errorf("expected plugin result, got %v", result)
+	}
+}
+
+func TestExecuteServerFile_pluginReturnsError(t *testing.T) {
+	original := LoadPluginAndCallFunc
+	defer func() { LoadPluginAndCallFunc = original }()
+
+	LoadPluginAndCallFunc = func(fp string, r *http.Request, p map[string]string) (map[string]interface{}, error) {
+		return nil, errors.New("plugin failed")
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/plugin", nil)
+	_, err := ExecuteServerFile("dummy.go", req, nil)
+	if err == nil || !strings.Contains(err.Error(), "plugin failed") {
+		t.Errorf("expected plugin failure, got %v", err)
+	}
+}
+
+func TestExecuteServerFile_pluginNotFound_fallbackToSubprocess(t *testing.T) {
+	originalPlugin := LoadPluginAndCallFunc
+	originalSub := ExecuteServerFileWithSubprocessFunc
+	defer func() {
+		LoadPluginAndCallFunc = originalPlugin
+		ExecuteServerFileWithSubprocessFunc = originalSub
+	}()
+
+	LoadPluginAndCallFunc = func(fp string, r *http.Request, p map[string]string) (map[string]interface{}, error) {
+		return nil, ErrPluginNotFound
+	}
+
+	ExecuteServerFileWithSubprocessFunc = func(fp string, r *http.Request, p map[string]string) (map[string]interface{}, error) {
+		return map[string]interface{}{"fallback": true}, nil
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/fallback", nil)
+	result, err := ExecuteServerFile("dummy.go", req, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result["fallback"] != true {
+		t.Errorf("expected fallback result, got %v", result)
+	}
+}
+
+func TestExecuteAPIFile_pluginReturnsResult(t *testing.T) {
+	original := LoadPluginAndCallFunc
+	defer func() { LoadPluginAndCallFunc = original }()
+
+	LoadPluginAndCallFunc = func(fp string, r *http.Request, p map[string]string) (map[string]interface{}, error) {
+		return map[string]interface{}{"hello": "world"}, nil
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api", nil)
+	out, err := ExecuteAPIFile("dummy.go", req, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(string(out), "world") {
+		t.Errorf("expected json with world, got %s", string(out))
+	}
+}
+
+func TestExecuteAPIFile_pluginError(t *testing.T) {
+	original := LoadPluginAndCallFunc
+	defer func() { LoadPluginAndCallFunc = original }()
+
+	LoadPluginAndCallFunc = func(fp string, r *http.Request, p map[string]string) (map[string]interface{}, error) {
+		return nil, errors.New("broken")
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api", nil)
+	_, err := ExecuteAPIFile("dummy.go", req, nil)
+	if err == nil || !strings.Contains(err.Error(), "broken") {
+		t.Errorf("expected error, got %v", err)
+	}
+}
+
+func TestExecuteAPIFile_pluginNotFound_fallback(t *testing.T) {
+	originalPlugin := LoadPluginAndCallFunc
+	originalSub := ExecuteAPIFileWithSubprocessFunc
+	defer func() {
+		LoadPluginAndCallFunc = originalPlugin
+		ExecuteAPIFileWithSubprocessFunc = originalSub
+	}()
+
+	LoadPluginAndCallFunc = func(fp string, r *http.Request, p map[string]string) (map[string]interface{}, error) {
+		return nil, ErrPluginNotFound
+	}
+
+	ExecuteAPIFileWithSubprocessFunc = func(fp string, r *http.Request, p map[string]string) ([]byte, error) {
+		return []byte(`{"fallback":true}`), nil
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/fallback", nil)
+	out, err := ExecuteAPIFile("dummy.go", req, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(string(out), `"fallback":true`) {
+		t.Errorf("expected fallback JSON, got %s", string(out))
+	}
+}
+
+func TestExecuteServerFileWithSubprocess_filepathRelFails(t *testing.T) {
+	originalFindMod := findGoModRoot
+	originalRel := filepathRelFunc
+	defer func() {
+		findGoModRoot = originalFindMod
+		filepathRelFunc = originalRel
+	}()
+
+	findGoModRoot = func(startPath string) (string, string, error) {
+		return "/any/path", "example.com/test", nil
+	}
+
+	filepathRelFunc = func(basepath, targpath string) (string, error) {
+		return "", errors.New("rel failed")
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-
-	_, err := ExecuteServerFile(serverPath, req, map[string]string{}, false)
-	if err == nil {
-		t.Fatal("expected error, got nil")
+	_, err := ExecuteServerFileWithSubprocess("/tmp/index.server.go", req, nil)
+	if err == nil || !strings.Contains(err.Error(), "cannot resolve relative import path") {
+		t.Errorf("expected relative path error, got %v", err)
 	}
-	if !IsNotFoundError(err) {
+}
+
+func TestExecuteServerFileWithSubprocess_templateExecuteError(t *testing.T) {
+	originalFindMod := findGoModRoot
+	originalTemplate := runnerTemplate
+	defer func() {
+		findGoModRoot = originalFindMod
+		runnerTemplate = originalTemplate
+	}()
+
+	tmp := t.TempDir()
+	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/badtemplate\n"), 0644)
+
+	dir := filepath.Join(tmp, "routes", "errtemplate")
+	_ = os.MkdirAll(dir, 0755)
+
+	serverPath := filepath.Join(dir, "index.server.go")
+	_ = os.WriteFile(serverPath, []byte(`package errtemplate; import "net/http"; func HandleRequest(r *http.Request, _ map[string]string)(map[string]interface{}, error){ return map[string]interface{}{"ok":true}, nil }`), 0644)
+
+	findGoModRoot = func(startPath string) (string, string, error) {
+		return tmp, "example.com/badtemplate", nil
+	}
+
+	runnerTemplate = `{{ .DoesNotExist.Method }}`
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	_, err := ExecuteServerFileWithSubprocess(serverPath, req, nil)
+
+	if err == nil || !strings.Contains(err.Error(), "template execution error") {
+		t.Errorf("expected template execution error, got %v", err)
+	}
+}
+
+func TestExecuteServerFileWithSubprocess_formatSourceFails(t *testing.T) {
+	originalFindMod := findGoModRoot
+	originalTemplate := runnerTemplate
+	defer func() {
+		findGoModRoot = originalFindMod
+		runnerTemplate = originalTemplate
+	}()
+
+	tmp := t.TempDir()
+	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/badformat\n"), 0644)
+
+	dir := filepath.Join(tmp, "routes", "badformat")
+	_ = os.MkdirAll(dir, 0755)
+
+	serverPath := filepath.Join(dir, "index.server.go")
+	_ = os.WriteFile(serverPath, []byte(`package badformat; import "net/http"; func HandleRequest(r *http.Request, _ map[string]string)(map[string]interface{}, error){ return map[string]interface{}{"ok":true}, nil }`), 0644)
+
+	findGoModRoot = func(startPath string) (string, string, error) {
+		return tmp, "example.com/badformat", nil
+	}
+
+	runnerTemplate = `package main func BAD {}`
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	_, err := ExecuteServerFileWithSubprocess(serverPath, req, nil)
+
+	if err == nil || !strings.Contains(err.Error(), "exec error") {
+		t.Errorf("expected subprocess exec error due to unformatted code, got: %v", err)
+	}
+}
+
+func TestExecuteServerFileWithSubprocess_mkdirFails(t *testing.T) {
+	originalMod := findGoModRoot
+	originalMkdir := osMkdirAll
+	defer func() {
+		findGoModRoot = originalMod
+		osMkdirAll = originalMkdir
+	}()
+
+	tmp := t.TempDir()
+	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/mkdirfail\n"), 0644)
+	dir := filepath.Join(tmp, "routes", "failmkdir")
+	_ = os.MkdirAll(dir, 0755)
+	serverPath := filepath.Join(dir, "index.server.go")
+	_ = os.WriteFile(serverPath, []byte(`package failmkdir; import "net/http"; func HandleRequest(r *http.Request, _ map[string]string)(map[string]interface{}, error){ return nil, nil }`), 0644)
+
+	findGoModRoot = func(startPath string) (string, string, error) {
+		return tmp, "example.com/mkdirfail", nil
+	}
+
+	osMkdirAll = func(path string, perm os.FileMode) error {
+		return errors.New("mkdir blocked")
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	_, err := ExecuteServerFileWithSubprocess(serverPath, req, nil)
+	if err == nil || !strings.Contains(err.Error(), "could not create temp dir") {
+		t.Errorf("expected mkdir error, got: %v", err)
+	}
+}
+
+func TestExecuteServerFileWithSubprocess_writeFileFails(t *testing.T) {
+	originalMod := findGoModRoot
+	originalWrite := osWriteFile
+	defer func() {
+		findGoModRoot = originalMod
+		osWriteFile = originalWrite
+	}()
+
+	tmp := t.TempDir()
+	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/writefail\n"), 0644)
+	dir := filepath.Join(tmp, "routes", "failwrite")
+	_ = os.MkdirAll(dir, 0755)
+	serverPath := filepath.Join(dir, "index.server.go")
+	_ = os.WriteFile(serverPath, []byte(`package failwrite; import "net/http"; func HandleRequest(r *http.Request, _ map[string]string)(map[string]interface{}, error){ return nil, nil }`), 0644)
+
+	findGoModRoot = func(startPath string) (string, string, error) {
+		return tmp, "example.com/writefail", nil
+	}
+
+	osWriteFile = func(name string, data []byte, perm os.FileMode) error {
+		if strings.HasSuffix(name, "main.go") {
+			return errors.New("write blocked")
+		}
+		return os.WriteFile(name, data, perm)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	_, err := ExecuteServerFileWithSubprocess(serverPath, req, nil)
+	if err == nil || !strings.Contains(err.Error(), "could not write temp file") {
+		t.Errorf("expected write error, got: %v", err)
+	}
+}
+
+func TestExecuteServerFileWithSubprocess_ExecReturnsNotFoundError(t *testing.T) {
+	originalMod := findGoModRoot
+	defer func() { findGoModRoot = originalMod }()
+
+	tmp := t.TempDir()
+	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/errnotfound\n"), 0644)
+	dir := filepath.Join(tmp, "routes", "notfound")
+	_ = os.MkdirAll(dir, 0755)
+
+	goFile := filepath.Join(dir, "index.server.go")
+	_ = os.WriteFile(goFile, []byte(`package notfound; import "net/http"; func HandleRequest(r *http.Request, _ map[string]string)(map[string]interface{}, error){ return nil, nil }`), 0644)
+
+	findGoModRoot = func(startPath string) (string, string, error) {
+		return tmp, "example.com/errnotfound", nil
+	}
+
+	runnerTemplate = `package main
+import (
+	"log"
+	"os"
+)
+func main() {
+	log.SetOutput(os.Stderr)
+	log.Println("barry-error: barry: not found")
+	os.Exit(1)
+}`
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	_, err := ExecuteServerFileWithSubprocess(goFile, req, nil)
+
+	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got: %v", err)
 	}
 }
 
-func TestExecuteServerFile_MkdirAllFails(t *testing.T) {
+func TestExecuteServerFileWithSubprocess_JSONDecodeError(t *testing.T) {
+	originalMod := findGoModRoot
+	defer func() { findGoModRoot = originalMod }()
+
 	tmp := t.TempDir()
-	fixedTime := time.Date(2025, 7, 6, 12, 0, 0, 0, time.UTC)
+	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/badjson\n"), 0644)
+	dir := filepath.Join(tmp, "routes", "badjson")
+	_ = os.MkdirAll(dir, 0755)
 
-	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/barrytest\n"), 0644)
-	routeDir := filepath.Join(tmp, "routes")
-	_ = os.MkdirAll(routeDir, 0755)
+	goFile := filepath.Join(dir, "index.server.go")
+	_ = os.WriteFile(goFile, []byte(`package badjson; import "net/http"; func HandleRequest(r *http.Request, _ map[string]string)(map[string]interface{}, error){ return nil, nil }`), 0644)
 
-	serverPath := filepath.Join(routeDir, "index.server.go")
-	_ = os.WriteFile(serverPath, []byte(`package routes; import "net/http"; func HandleRequest(r *http.Request, p map[string]string)(map[string]interface{}, error){ return nil, nil }`), 0644)
-
-	absPath, _ := filepath.Abs(serverPath)
-	hash := sha256.Sum256([]byte(absPath + fixedTime.String()))
-	runDir := filepath.Join(tmp, ".barry-tmp", fmt.Sprintf("%x", hash[:8]))
-
-	_ = os.MkdirAll(filepath.Dir(runDir), 0755)
-	_ = os.WriteFile(runDir, []byte("I am a file, not a dir"), 0644)
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-
-	_, err := ExecuteServerFileWithTime(serverPath, req, map[string]string{}, false, func() time.Time { return fixedTime })
-	if err == nil || !strings.Contains(err.Error(), "could not create temp dir") {
-		t.Fatalf("expected temp dir creation error, got: %v", err)
+	findGoModRoot = func(startPath string) (string, string, error) {
+		return tmp, "example.com/badjson", nil
 	}
-}
 
-func TestExecuteServerFile_WriteFileFails(t *testing.T) {
-	tmp := t.TempDir()
-	fixedTime := time.Date(2025, 7, 6, 12, 0, 0, 0, time.UTC)
-
-	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/barrytest\n"), 0644)
-	routeDir := filepath.Join(tmp, "routes", "failwrite")
-	_ = os.MkdirAll(routeDir, 0755)
-
-	serverPath := filepath.Join(routeDir, "index.server.go")
-	_ = os.WriteFile(serverPath, []byte(`package failwrite; import "net/http"; func HandleRequest(r *http.Request, p map[string]string)(map[string]interface{}, error){ return nil, nil }`), 0644)
-
-	absPath, _ := filepath.Abs(serverPath)
-	hash := sha256.Sum256([]byte(absPath + fixedTime.String()))
-	runDir := filepath.Join(tmp, ".barry-tmp", fmt.Sprintf("%x", hash[:8]))
-	_ = os.MkdirAll(runDir, 0755)
-	_ = os.Chmod(runDir, 0500)
-
-	t.Cleanup(func() {
-		_ = os.Chmod(runDir, 0755)
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-
-	_, err := ExecuteServerFileWithTime(serverPath, req, map[string]string{}, false, func() time.Time { return fixedTime })
-	if err == nil || !strings.Contains(err.Error(), "could not write temp file") {
-		t.Fatalf("expected write file error, got: %v", err)
-	}
-}
-
-func TestFindGoModRoot_NoModuleLine(t *testing.T) {
-	tmpDir := t.TempDir()
-	_ = os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("// no module line\n"), 0644)
-	file := filepath.Join(tmpDir, "somefile.go")
-	_ = os.WriteFile(file, []byte("// dummy"), 0644)
-
-	_, _, err := findGoModRoot(file)
-	if err == nil || !strings.Contains(err.Error(), "go.mod not found") {
-		t.Fatalf("expected go.mod not found error, got: %v", err)
-	}
-}
-
-func TestExecuteServerFile_BadJSONOutput(t *testing.T) {
-	tmp := t.TempDir()
-	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/jsonfail\n"), 0644)
-
-	routeDir := filepath.Join(tmp, "routes", "badjson")
-	_ = os.MkdirAll(routeDir, 0755)
-	serverPath := filepath.Join(routeDir, "index.server.go")
-	code := `package badjson
-import ("net/http"; "fmt")
-func HandleRequest(r *http.Request, params map[string]string) (map[string]interface{}, error) {
-	fmt.Println("not json")
-	return nil, nil
+	runnerTemplate = `package main
+import (
+	"fmt"
+)
+func main() {
+	fmt.Print("this is not json")
 }`
-	_ = os.WriteFile(serverPath, []byte(code), 0644)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	_, err := ExecuteServerFileWithSubprocess(goFile, req, nil)
 
-	_, err := ExecuteServerFile(serverPath, req, map[string]string{}, false)
 	if err == nil || !strings.Contains(err.Error(), "json decode error") {
-		t.Fatalf("expected JSON decode error, got: %v", err)
+		t.Errorf("expected json decode error, got: %v", err)
 	}
 }
 
-func TestExecuteServerFile_TemplateExecutionFails(t *testing.T) {
-	orig := runnerTemplate
-	defer func() { runnerTemplate = orig }()
-	runnerTemplate = `{{ .DoesNotExist }}`
+func TestExecuteServerFileWithSubprocess_Success(t *testing.T) {
+	originalMod := findGoModRoot
+	defer func() { findGoModRoot = originalMod }()
+	runnerTemplate = defaultRunnerTemplate
 
 	tmp := t.TempDir()
-	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/test\n"), 0644)
 
-	serverPath := filepath.Join(tmp, "index.server.go")
-	_ = os.WriteFile(serverPath, []byte(`package test; import "net/http"; func HandleRequest(r *http.Request, _ map[string]string) (map[string]interface{}, error) { return nil, nil }`), 0644)
+	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/success\n"), 0644)
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	dir := filepath.Join(tmp, "routes", "ok")
+	_ = os.MkdirAll(dir, 0755)
 
-	_, err := ExecuteServerFile(serverPath, req, map[string]string{}, false)
-	if err == nil || !strings.Contains(err.Error(), "template execution error") {
-		t.Fatalf("expected template execution error, got: %v", err)
-	}
+	goFile := filepath.Join(dir, "index.server.go")
+	code := `
+package ok
+
+import "net/http"
+
+func HandleRequest(r *http.Request, _ map[string]string) (map[string]interface{}, error) {
+	return map[string]interface{}{"msg": "success"}, nil
 }
-
-func TestExecuteServerFile_DevModeStderrMultiWriter(t *testing.T) {
-	tmp := t.TempDir()
-	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/devmode\n"), 0644)
-
-	routeDir := filepath.Join(tmp, "routes", "dm")
-	_ = os.MkdirAll(routeDir, 0755)
-
-	serverPath := filepath.Join(routeDir, "index.server.go")
-	_ = os.WriteFile(serverPath, []byte(`package dm; import "net/http"; func HandleRequest(r *http.Request, p map[string]string)(map[string]interface{}, error){ return map[string]interface{}{"x": 1}, nil }`), 0644)
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-
-	_, err := ExecuteServerFile(serverPath, req, map[string]string{}, true)
-	if err != nil {
-		t.Fatalf("expected success in dev mode, got: %v", err)
-	}
-}
-
-func TestExecuteServerFile_CommandFails(t *testing.T) {
-	tmp := t.TempDir()
-	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/boom\n"), 0644)
-
-	routeDir := filepath.Join(tmp, "routes", "boom")
-	_ = os.MkdirAll(routeDir, 0755)
-
-	serverPath := filepath.Join(routeDir, "index.server.go")
-	_ = os.WriteFile(serverPath, []byte(`package boom; import "net/http"; func HandleRequest(r *http.Request, p map[string]string)(map[string]interface{}, error){ return nil, nil }`), 0644)
-
-	orig := runnerTemplate
-	defer func() { runnerTemplate = orig }()
-	runnerTemplate = `package main; import "bad/import/path" // bad
-
-func main() {}
 `
+	_ = os.WriteFile(goFile, []byte(code), 0644)
+
+	findGoModRoot = func(startPath string) (string, string, error) {
+		return tmp, "example.com/success", nil
+	}
+
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	_, err := ExecuteServerFile(serverPath, req, map[string]string{}, false)
-	if err == nil || !strings.Contains(err.Error(), "exec error") {
-		t.Fatalf("expected exec error, got: %v", err)
+	result, err := ExecuteServerFileWithSubprocess(goFile, req, nil)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result["msg"] != "success" {
+		t.Errorf("expected result[msg] to be 'success', got %v", result["msg"])
 	}
 }
 
-func TestFindGoModRoot_ReadFileFails(t *testing.T) {
-	tmpDir := t.TempDir()
-	goModPath := filepath.Join(tmpDir, "go.mod")
-	_ = os.WriteFile(goModPath, []byte("module example.com/test"), 0000)
+func TestExecuteAPIFileWithSubprocess_SubprocessFails(t *testing.T) {
+	original := ExecuteServerFileWithSubprocessFunc
+	defer func() { ExecuteServerFileWithSubprocessFunc = original }()
 
-	file := filepath.Join(tmpDir, "main.go")
+	expectedErr := errors.New("subprocess failed")
+
+	ExecuteServerFileWithSubprocessFunc = func(fp string, r *http.Request, p map[string]string) (map[string]interface{}, error) {
+		return nil, expectedErr
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	_, err := ExecuteAPIFileWithSubprocess("fake.go", req, nil)
+
+	if !errors.Is(err, expectedErr) {
+		t.Errorf("expected subprocess error to be returned, got: %v", err)
+	}
+}
+
+func TestFindGoModRoot_ReadFails(t *testing.T) {
+	original := osReadFile
+	defer func() { osReadFile = original }()
+
+	tmp := t.TempDir()
+	goModPath := filepath.Join(tmp, "go.mod")
+
+	_ = os.WriteFile(goModPath, []byte("module test"), 0644)
+
+	osReadFile = func(path string) ([]byte, error) {
+		if strings.HasSuffix(path, "go.mod") {
+			return nil, errors.New("simulated read failure")
+		}
+		return original(path)
+	}
+
+	file := filepath.Join(tmp, "nested", "main.go")
+	_ = os.MkdirAll(filepath.Dir(file), 0755)
 	_ = os.WriteFile(file, []byte("// dummy"), 0644)
 
 	_, _, err := findGoModRoot(file)
 	if err == nil || !strings.Contains(err.Error(), "failed to read go.mod") {
-		t.Fatalf("expected read error, got: %v", err)
-	}
-}
-
-func TestExecuteAPIFile_JSONOutput(t *testing.T) {
-	tmp := t.TempDir()
-
-	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/testapi\n"), 0644)
-
-	dir := filepath.Join(tmp, "api", "hello")
-	_ = os.MkdirAll(dir, 0755)
-
-	code := `package hello
-
-import "net/http"
-
-func HandleAPI(r *http.Request, p map[string]string) (interface{}, error) {
-	return map[string]interface{}{
-		"message": "hi",
-	}, nil
-}`
-
-	path := filepath.Join(dir, "index.go")
-	_ = os.WriteFile(path, []byte(code), 0644)
-
-	req := httptest.NewRequest("GET", "/?x=1", nil)
-
-	result, err := ExecuteAPIFile(path, req, map[string]string{}, false)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !strings.Contains(string(result), "hi") {
-		t.Errorf("expected JSON output with 'hi', got: %s", result)
-	}
-}
-
-func TestExecuteAPIFile_GoModNotFound(t *testing.T) {
-	tmp := t.TempDir()
-
-	serverPath := filepath.Join(tmp, "index.go")
-	_ = os.WriteFile(serverPath, []byte("// dummy"), 0644)
-
-	req, _ := http.NewRequest("GET", "/", nil)
-	_, err := ExecuteAPIFile(serverPath, req, map[string]string{}, false)
-	if err == nil || !strings.Contains(err.Error(), "could not resolve go.mod") {
-		t.Fatalf("expected go.mod resolution error, got: %v", err)
-	}
-}
-
-func TestExecuteAPIFile_TemplateExecutionFails(t *testing.T) {
-	orig := apiRunnerTemplate
-	defer func() { apiRunnerTemplate = orig }()
-
-	apiRunnerTemplate = `{{ .DoesNotExist }}`
-
-	tmp := t.TempDir()
-	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/broken\n"), 0644)
-
-	path := filepath.Join(tmp, "api", "bad")
-	_ = os.MkdirAll(path, 0755)
-	_ = os.WriteFile(filepath.Join(path, "index.go"), []byte("package bad"), 0644)
-
-	req := httptest.NewRequest("GET", "/", nil)
-
-	_, err := ExecuteAPIFile(filepath.Join(path, "index.go"), req, map[string]string{}, false)
-	if err == nil || !strings.Contains(err.Error(), "template execution error") {
-		t.Fatalf("expected template error, got: %v", err)
-	}
-}
-
-func TestExecuteAPIFile_CommandFails(t *testing.T) {
-	tmp := t.TempDir()
-	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/badcmd\n"), 0644)
-
-	path := filepath.Join(tmp, "api", "crash")
-	_ = os.MkdirAll(path, 0755)
-
-	code := `package crash
-
-import "net/http"
-
-func HandleAPI(r *http.Request, p map[string]string) (interface{}, error) {
-	panic("fail")
-}`
-	apiFile := filepath.Join(path, "index.go")
-	_ = os.WriteFile(apiFile, []byte(code), 0644)
-
-	req := httptest.NewRequest("GET", "/", nil)
-
-	_, err := ExecuteAPIFile(apiFile, req, map[string]string{}, false)
-	if err == nil || !strings.Contains(err.Error(), "exec error") {
-		t.Fatalf("expected exec error, got: %v", err)
-	}
-}
-
-func TestExecuteAPIFile_NotFoundError(t *testing.T) {
-	tmp := t.TempDir()
-	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/404api\n"), 0644)
-
-	path := filepath.Join(tmp, "api", "missing")
-	_ = os.MkdirAll(path, 0755)
-
-	code := `package missing
-
-import (
-	"errors"
-	"net/http"
-)
-
-func HandleAPI(r *http.Request, p map[string]string) (interface{}, error) {
-	return nil, errors.New("barry: not found")
-}`
-	apiFile := filepath.Join(path, "index.go")
-	_ = os.WriteFile(apiFile, []byte(code), 0644)
-
-	req := httptest.NewRequest("GET", "/", nil)
-
-	_, err := ExecuteAPIFile(apiFile, req, map[string]string{}, false)
-	if err == nil || !IsNotFoundError(err) {
-		t.Fatalf("expected not found error, got: %v", err)
-	}
-}
-
-func TestExecuteAPIFile_CannotResolveRelativeImport(t *testing.T) {
-	tmp := t.TempDir()
-
-	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/irrelevant\n"), 0644)
-	apiPath := filepath.Join(tmp, "api", "foo")
-	_ = os.MkdirAll(apiPath, 0755)
-	apiFile := filepath.Join(apiPath, "index.go")
-	_ = os.WriteFile(apiFile, []byte(`package foo; import "net/http"; func HandleAPI(r *http.Request, _ map[string]string)(interface{}, error){ return nil, nil }`), 0644)
-
-	orig := findGoModRoot
-	defer func() { findGoModRoot = orig }()
-	findGoModRoot = func(_ string) (string, string, error) {
-		return string([]byte{0x7f}), "irrelevant", nil
-	}
-
-	req, _ := http.NewRequest("GET", "/", nil)
-	_, err := ExecuteAPIFile(apiFile, req, nil, false)
-	if err == nil || !strings.Contains(err.Error(), "cannot resolve relative import path") {
-		t.Fatalf("expected relative import error, got: %v", err)
-	}
-}
-
-func TestExecuteServerFile_UnformattedSource(t *testing.T) {
-	tmp := t.TempDir()
-	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/badformat\n"), 0644)
-
-	routeDir := filepath.Join(tmp, "routes", "ugly")
-	_ = os.MkdirAll(routeDir, 0755)
-
-	serverPath := filepath.Join(routeDir, "index.server.go")
-	_ = os.WriteFile(serverPath, []byte(`package ugly
-
-import "net/http"
-
-func HandleRequest(r *http.Request, p map[string]string) (map[string]interface{}, error) {
-return map[string]interface{}{ "ok":true}, nil
-}
-`), 0644)
-
-	orig := runnerTemplate
-	defer func() { runnerTemplate = orig }()
-	runnerTemplate = `package main
-import("encoding/json";"log";"net/http";"os"
-target "{{ .ImportPath }}")
-func main(){
-log.SetOutput(os.Stderr)
-r:=&http.Request{}
-params:=map[string]string{}
-result,err:=target.HandleRequest(r,params)
-if err!=nil{
-log.Println("barry-error:",err)
-os.Exit(1)}
-json.NewEncoder(os.Stdout).Encode(result)}`
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-
-	result, err := ExecuteServerFile(serverPath, req, map[string]string{}, false)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if val := result["ok"]; val != true {
-		t.Errorf("expected ok = true, got: %v", result)
-	}
-}
-
-func TestExecuteServerFile_ResolveRelativeImportFails(t *testing.T) {
-	orig := findGoModRoot
-	defer func() { findGoModRoot = orig }()
-
-	tmp := t.TempDir()
-	serverPath := filepath.Join(tmp, "index.server.go")
-	_ = os.WriteFile(serverPath, []byte("// dummy"), 0644)
-
-	findGoModRoot = func(_ string) (string, string, error) {
-		return string([]byte{0x00}), "example.com/test", nil
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-
-	_, err := ExecuteServerFile(serverPath, req, map[string]string{}, false)
-	if err == nil || !strings.Contains(err.Error(), "cannot resolve relative import path") {
-		t.Fatalf("expected relative import error, got: %v", err)
-	}
-}
-
-func TestExecuteServerFile_FallbackOnFormatError(t *testing.T) {
-	tmp := t.TempDir()
-	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/fmtfail\n"), 0644)
-
-	serverPath := filepath.Join(tmp, "index.server.go")
-	_ = os.WriteFile(serverPath, []byte(`package fmtfail; import "net/http"; func HandleRequest(r *http.Request, _ map[string]string) (map[string]interface{}, error) { return map[string]interface{}{"ok": true}, nil }`), 0644)
-
-	orig := runnerTemplate
-	defer func() { runnerTemplate = orig }()
-
-	runnerTemplate = `package main
-	func main() {
-		this is !not valid go
-	}`
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-
-	_, err := ExecuteServerFile(serverPath, req, map[string]string{}, false)
-	if err == nil || !strings.Contains(err.Error(), "exec error") {
-		t.Fatalf("expected exec error due to bad formatting, got: %v", err)
-	}
-}
-
-func TestExecuteAPIFile_MkdirAllFails(t *testing.T) {
-	tmp := t.TempDir()
-	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/testapi\n"), 0644)
-
-	apiPath := filepath.Join(tmp, "api", "test")
-	_ = os.MkdirAll(apiPath, 0755)
-	apiFile := filepath.Join(apiPath, "index.go")
-	_ = os.WriteFile(apiFile, []byte(`package test; import "net/http"; func HandleAPI(r *http.Request, _ map[string]string)(interface{}, error){ return nil, nil }`), 0644)
-
-	req := httptest.NewRequest("GET", "/", nil)
-
-	fixedTime := time.Date(2025, 7, 15, 12, 0, 0, 0, time.UTC)
-	origNow := nowFunc
-	nowFunc = func() time.Time { return fixedTime }
-	defer func() { nowFunc = origNow }()
-
-	absPath, _ := filepath.Abs(apiFile)
-	hash := sha256.Sum256([]byte(absPath + req.Method + fixedTime.String()))
-	runDir := filepath.Join(tmp, ".barry-tmp", fmt.Sprintf("%x", hash[:8]))
-
-	_ = os.MkdirAll(filepath.Dir(runDir), 0755)
-	_ = os.WriteFile(runDir, []byte("I am a file, not a dir"), 0644)
-
-	_, err := ExecuteAPIFile(apiFile, req, nil, false)
-	if err == nil || !strings.Contains(err.Error(), "could not create temp dir") {
-		t.Fatalf("expected mkdir error, got: %v", err)
-	}
-}
-
-func TestExecuteAPIFile_DevModeTrueTriggersMultiWriter(t *testing.T) {
-	tmp := t.TempDir()
-	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/devapi\n"), 0644)
-
-	apiPath := filepath.Join(tmp, "api", "dev")
-	_ = os.MkdirAll(apiPath, 0755)
-	apiFile := filepath.Join(apiPath, "index.go")
-	_ = os.WriteFile(apiFile, []byte(`package dev; import "net/http"; func HandleAPI(r *http.Request, p map[string]string) (interface{}, error) { return map[string]interface{}{"dev": true}, nil }`), 0644)
-
-	req := httptest.NewRequest("GET", "/", nil)
-
-	_, err := ExecuteAPIFile(apiFile, req, nil, true)
-	if err != nil {
-		t.Fatalf("unexpected error in devMode: %v", err)
-	}
-}
-
-func TestExecuteAPIFile_FormatFailsButCompiles(t *testing.T) {
-	tmp := t.TempDir()
-	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/apiunformatted\n"), 0644)
-
-	apiPath := filepath.Join(tmp, "api", "ugly")
-	_ = os.MkdirAll(apiPath, 0755)
-
-	apiFile := filepath.Join(apiPath, "index.go")
-	_ = os.WriteFile(apiFile, []byte(`package ugly; import "net/http"; func HandleAPI(r *http.Request, p map[string]string)(interface{}, error){ return map[string]interface{}{"ugly":true}, nil }`), 0644)
-
-	origTemplate := apiRunnerTemplate
-	defer func() { apiRunnerTemplate = origTemplate }()
-	apiRunnerTemplate = `package main
-
-import (
-	"encoding/json"
-	"log"
-	"net/http"
-	"os"
-	target "{{ .ImportPath }}"
-)
-
-func main() {
-	log.SetOutput(os.Stderr)
-	r, _ := http.NewRequest("{{ .Method }}", "{{ .URL }}", nil)
-	params := map[string]string{}
-	result, err := target.HandleAPI(r, params)
-	if err != nil {
-		log.Println("barry-error:", err)
-		os.Exit(1)
-	}
-	json.NewEncoder(os.Stdout).Encode(result)
-}`
-
-	origFormat := formatSource
-	formatSource = func(_ []byte) ([]byte, error) {
-		return nil, fmt.Errorf("format failed!")
-	}
-	defer func() { formatSource = origFormat }()
-
-	req := httptest.NewRequest("GET", "/?x=1", nil)
-
-	result, err := ExecuteAPIFile(apiFile, req, nil, false)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !strings.Contains(string(result), `"ugly":true`) {
-		t.Errorf("expected result to contain 'ugly': %s", result)
-	}
-}
-
-func TestExecuteAPIFile_WriteFileFails(t *testing.T) {
-	tmp := t.TempDir()
-	_ = os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/writefailapi\n"), 0644)
-
-	apiPath := filepath.Join(tmp, "api", "failwrite")
-	_ = os.MkdirAll(apiPath, 0755)
-
-	apiFile := filepath.Join(apiPath, "index.go")
-	_ = os.WriteFile(apiFile, []byte(`package failwrite; import "net/http"; func HandleAPI(r *http.Request, _ map[string]string)(interface{}, error){ return nil, nil }`), 0644)
-
-	req := httptest.NewRequest("GET", "/", nil)
-
-	fixedTime := time.Date(2025, 7, 15, 12, 0, 0, 0, time.UTC)
-	origNow := nowFunc
-	nowFunc = func() time.Time { return fixedTime }
-	defer func() { nowFunc = origNow }()
-
-	absPath, _ := filepath.Abs(apiFile)
-	hash := sha256.Sum256([]byte(absPath + req.Method + fixedTime.String()))
-	runDir := filepath.Join(tmp, ".barry-tmp", fmt.Sprintf("%x", hash[:8]))
-	tmpFile := filepath.Join(runDir, "main.go")
-
-	_ = os.MkdirAll(runDir, 0755)
-	_ = os.WriteFile(tmpFile, []byte("cannot overwrite"), 0444)
-
-	t.Cleanup(func() { _ = os.Chmod(runDir, 0755) })
-
-	_, err := ExecuteAPIFile(apiFile, req, nil, false)
-	if err == nil || !strings.Contains(err.Error(), "could not write temp file") {
-		t.Fatalf("expected write file error, got: %v", err)
-	}
-}
-
-func Test_jsonMarshalFunc(t *testing.T) {
-	fnRaw, ok := templateFuncs["jsonMarshal"]
-	if !ok {
-		t.Fatal("jsonMarshal not found in templateFuncs")
-	}
-
-	fn, ok := fnRaw.(func(interface{}) string)
-	if !ok {
-		t.Fatal("jsonMarshal has unexpected type")
-	}
-
-	type testCase struct {
-		input    interface{}
-		expected string
-	}
-
-	tests := []testCase{
-		{
-			input:    []string{"a", "b", "c"},
-			expected: `[]string{"a", "b", "c"}`,
-		},
-		{
-			input:    []string{"onlyOne"},
-			expected: `[]string{"onlyOne"}`,
-		},
-		{
-			input:    "plain string",
-			expected: strconv.Quote("plain string"),
-		},
-		{
-			input:    123,
-			expected: "123",
-		},
-		{
-			input:    map[string]int{"x": 1},
-			expected: `{"x":1}`,
-		},
-	}
-
-	for _, tc := range tests {
-		result := fn(tc.input)
-		if result != tc.expected {
-			t.Errorf("jsonMarshal(%#v) = %s; want %s", tc.input, result, tc.expected)
-		}
+		t.Errorf("expected read failure error, got %v", err)
 	}
 }

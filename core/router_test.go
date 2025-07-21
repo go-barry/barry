@@ -324,7 +324,7 @@ func TestRouter_ServerFileReturnsNotFoundError(t *testing.T) {
 	}}
 
 	original := ExecuteServerFile
-	ExecuteServerFile = func(_ string, _ *http.Request, _ map[string]string, _ bool) (map[string]interface{}, error) {
+	ExecuteServerFile = func(_ string, _ *http.Request, _ map[string]string) (map[string]interface{}, error) {
 		return nil, ErrNotFound
 	}
 	defer func() { ExecuteServerFile = original }()
@@ -383,7 +383,7 @@ func TestRouter_ServerFileReturnsGenericError(t *testing.T) {
 	}}
 
 	original := ExecuteServerFile
-	ExecuteServerFile = func(_ string, _ *http.Request, _ map[string]string, _ bool) (map[string]interface{}, error) {
+	ExecuteServerFile = func(_ string, _ *http.Request, _ map[string]string) (map[string]interface{}, error) {
 		return nil, ErrNotFound
 	}
 	defer func() { ExecuteServerFile = original }()
@@ -739,7 +739,7 @@ func TestRouter_ServerFile_GenericErrorNoTemplate(t *testing.T) {
 	}}
 
 	original := ExecuteServerFile
-	ExecuteServerFile = func(_ string, _ *http.Request, _ map[string]string, _ bool) (map[string]interface{}, error) {
+	ExecuteServerFile = func(_ string, _ *http.Request, _ map[string]string) (map[string]interface{}, error) {
 		return nil, errors.New("kaboom")
 	}
 	defer func() { ExecuteServerFile = original }()
@@ -965,7 +965,7 @@ func TestRouter_ParsesAndInjectsParams_WithExtension(t *testing.T) {
 	_ = os.MkdirAll("components", 0755)
 
 	original := ExecuteServerFile
-	ExecuteServerFile = func(_ string, _ *http.Request, params map[string]string, _ bool) (map[string]interface{}, error) {
+	ExecuteServerFile = func(_ string, _ *http.Request, params map[string]string) (map[string]interface{}, error) {
 		return map[string]interface{}{"id": params["id"]}, nil
 	}
 	defer func() { ExecuteServerFile = original }()
@@ -1000,7 +1000,7 @@ func TestServeHTTP_API_ParamSuffixStripped(t *testing.T) {
 
 	captured := map[string]string{}
 
-	ExecuteAPIFile = func(path string, req *http.Request, params map[string]string, devMode bool) ([]byte, error) {
+	ExecuteAPIFile = func(path string, req *http.Request, params map[string]string) ([]byte, error) {
 		captured = params
 		return []byte(`{"ok":true}`), nil
 	}
@@ -1174,7 +1174,7 @@ func TestServeHTTP_API_MatchesAndInvokesHandler(t *testing.T) {
 	orig := ExecuteAPIFile
 	defer func() { ExecuteAPIFile = orig }()
 
-	ExecuteAPIFile = func(path string, req *http.Request, params map[string]string, devMode bool) ([]byte, error) {
+	ExecuteAPIFile = func(path string, req *http.Request, params map[string]string) ([]byte, error) {
 		return []byte(`{"ok":true}`), nil
 	}
 
@@ -1213,7 +1213,7 @@ func TestServeHTTP_API_MatchesWithMultipleParams(t *testing.T) {
 
 	captured := map[string]string{}
 
-	ExecuteAPIFile = func(path string, req *http.Request, params map[string]string, devMode bool) ([]byte, error) {
+	ExecuteAPIFile = func(path string, req *http.Request, params map[string]string) ([]byte, error) {
 		captured = params
 		return []byte(`{"ok":true}`), nil
 	}
@@ -1264,7 +1264,7 @@ func TestServeHTTP_API_MatchWithoutParams(t *testing.T) {
 
 	var called bool
 
-	ExecuteAPIFile = func(path string, req *http.Request, params map[string]string, devMode bool) ([]byte, error) {
+	ExecuteAPIFile = func(path string, req *http.Request, params map[string]string) ([]byte, error) {
 		called = true
 		return []byte(`{"status":"ok"}`), nil
 	}
