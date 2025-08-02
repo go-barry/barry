@@ -194,14 +194,14 @@ func (r *Router) loadRoutes() {
 		pi := strings.Split(strings.TrimPrefix(routes[i].FilePath, "routes/"), "/")
 		pj := strings.Split(strings.TrimPrefix(routes[j].FilePath, "routes/"), "/")
 
+		if len(pi) != len(pj) {
+			return len(pi) < len(pj)
+		}
+
 		si := countStatic(pi)
 		sj := countStatic(pj)
 		if si != sj {
 			return si > sj
-		}
-
-		if len(pi) != len(pj) {
-			return len(pi) < len(pj)
 		}
 
 		return routes[i].FilePath < routes[j].FilePath
