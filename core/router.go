@@ -181,18 +181,30 @@ func (r *Router) loadRoutes() {
 	})
 
 	sort.SliceStable(routes, func(i, j int) bool {
-		isDynamic := func(parts []string) bool {
+		countStatic := func(parts []string) int {
+			count := 0
 			for _, part := range parts {
-				if strings.HasPrefix(part, "_") {
-					return true
+				if !strings.HasPrefix(part, "_") {
+					count++
 				}
 			}
-			return false
+			return count
 		}
+
 		pi := strings.Split(strings.TrimPrefix(routes[i].FilePath, "routes/"), "/")
 		pj := strings.Split(strings.TrimPrefix(routes[j].FilePath, "routes/"), "/")
 
-		return !isDynamic(pi) && isDynamic(pj)
+		if len(pi) != len(pj) {
+			return len(pi) < len(pj)
+		}
+
+		si := countStatic(pi)
+		sj := countStatic(pj)
+		if si != sj {
+			return si > sj
+		}
+
+		return routes[i].FilePath < routes[j].FilePath
 	})
 
 	r.routes = routes

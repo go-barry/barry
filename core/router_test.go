@@ -1410,3 +1410,45 @@ func TestGetFileExt(t *testing.T) {
 		t.Errorf("expected fallback html, got %s", got)
 	}
 }
+
+func TestRouter_LoadRoutes_FallbackBySegmentLengthAndAlphabetical(t *testing.T) {
+	t.Cleanup(cleanupTestArtifacts)
+
+	_ = os.MkdirAll("routes/a/b/c", 0755)
+	_ = os.WriteFile("routes/a/b/c/index.html", []byte(`Hello C`), 0644)
+
+	_ = os.MkdirAll("routes/x/y", 0755)
+	_ = os.WriteFile("routes/x/y/index.html", []byte(`Hello Y`), 0644)
+
+	_ = os.MkdirAll("routes/a/b/d", 0755)
+	_ = os.WriteFile("routes/a/b/d/index.html", []byte(`Hello D`), 0644)
+
+	_ = os.WriteFile("layout.html", []byte(`{{ define "layout" }}<html><body>{{ template "content" . }}</body></html>{{ end }}`), 0644)
+	_ = os.MkdirAll("components", 0755)
+
+	cfg := Config{
+		OutputDir:    t.TempDir(),
+		CacheEnabled: false,
+		DebugLogs:    true,
+	}
+	router := NewRouter(cfg, RuntimeContext{Env: "dev"}).(*Router)
+
+	router.loadRoutes()
+
+	paths := []string{}
+	for _, r := range router.routes {
+		paths = append(paths, r.FilePath)
+	}
+
+	wantOrder := []string{"routes/x/y", "routes/a/b/c", "routes/a/b/d"}
+
+	if len(paths) < len(wantOrder) {
+		t.Fatalf("expected at least %d routes, got %d", len(wantOrder), len(paths))
+	}
+
+	for i, want := range wantOrder {
+		if paths[i] != want {
+			t.Errorf("expected route %d to be %s, got %s", i, want, paths[i])
+		}
+	}
+}
